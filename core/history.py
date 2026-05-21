@@ -16,7 +16,7 @@ from typing import Iterable, Optional
 
 from PySide6.QtGui import QVector3D
 
-from core.geometry import Edge
+from core.geometry import Edge, Face
 
 
 class Command(ABC):
@@ -103,6 +103,26 @@ class DeleteEdgesCommand(Command):
             if edge not in scene.edges:
                 scene.edges.append(edge)
         # The original selection is not restored — SketchUp behaves the same.
+        scene.version += 1
+
+
+class AddFaceCommand(Command):
+    def __init__(self, vertices: Iterable[QVector3D]) -> None:
+        self.vertices = [QVector3D(v) for v in vertices]
+        self.face: Optional[Face] = None
+
+    def do(self, scene) -> None:
+        if self.face is None:
+            self.face = Face(list(self.vertices))
+        scene.faces.append(self.face)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self.face is not None:
+            try:
+                scene.faces.remove(self.face)
+            except ValueError:
+                pass
         scene.version += 1
 
 

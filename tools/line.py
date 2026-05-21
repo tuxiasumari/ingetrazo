@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from PySide6.QtGui import QVector3D
 
-from core.history import AddEdgeCommand
+from core.history import AddEdgeCommand, AddFaceCommand, CompoundCommand
 from tools.base import Tool, ToolContext
 
 
@@ -28,6 +28,9 @@ class LineTool(Tool):
         self.start_point: QVector3D | None = None
         self.hover_point: QVector3D | None = None
         self.chain_first_point: QVector3D | None = None
+        # Ordered list of vertices in the current chain. Populated as the
+        # user clicks; consumed to build a Face when the chain auto-closes.
+        self.chain_vertices: list[QVector3D] = []
 
     # ---- Lifecycle ----------------------------------------------------------
     def on_activate(self, viewport) -> None:
@@ -43,13 +46,21 @@ class LineTool(Tool):
         if self.start_point is None:
             self.start_point = clicked
             self.chain_first_point = clicked
+            self.chain_vertices = [clicked]
+            return
+
+        edge_cmd = AddEdgeCommand(self.start_point, clicked)
+        if ctx.snap.kind == "close" and len(self.chain_vertices) >= 3:
+            face_cmd = AddFaceCommand(list(self.chain_vertices))
+            ctx.viewport.history.execute(CompoundCommand([edge_cmd, face_cmd]))
+            self._reset()
+        elif ctx.snap.kind == "close":
+            ctx.viewport.history.execute(edge_cmd)
+            self._reset()
         else:
-            ctx.viewport.history.execute(AddEdgeCommand(self.start_point, clicked))
-            if ctx.snap.kind == "close":
-                # Polygon finished; start a fresh chain on the next click.
-                self._reset()
-            else:
-                self.start_point = clicked
+            ctx.viewport.history.execute(edge_cmd)
+            self.chain_vertices.append(clicked)
+            self.start_point = clicked
         ctx.viewport.update()
 
     def on_hover(self, ctx: ToolContext) -> None:
@@ -89,3 +100,4 @@ class LineTool(Tool):
     def _reset(self) -> None:
         self.start_point = None
         self.chain_first_point = None
+        self.chain_vertices = []

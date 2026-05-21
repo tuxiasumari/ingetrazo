@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from formats import wasia as wasia_format
 from tools.line import LineTool
+from tools.pushpull import PushPullTool
 from tools.rectangle import RectangleTool
 from tools.select import SelectTool
 from views.viewport import Viewport
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
             "select": SelectTool(),
             "line": LineTool(),
             "rectangle": RectangleTool(),
+            "pushpull": PushPullTool(),
         }
         self._tool_actions: dict[str, QAction] = {}
 

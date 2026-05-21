@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from PySide6.QtGui import QVector3D
 
-from core.history import AddEdgeCommand, CompoundCommand
+from core.history import AddEdgeCommand, AddFaceCommand, CompoundCommand
 from tools.base import Tool, ToolContext
 
 
@@ -45,6 +45,7 @@ class RectangleTool(Tool):
         commands = [
             AddEdgeCommand(corners[i], corners[(i + 1) % 4]) for i in range(4)
         ]
+        commands.append(AddFaceCommand(list(corners)))
         ctx.viewport.history.execute(CompoundCommand(commands))
         self._reset()
         ctx.viewport.update()

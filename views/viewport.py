@@ -66,12 +66,14 @@ from tools.base import Tool, ToolContext
 # OpenGL constants — kept as literals so we don't depend on PyOpenGL.
 GL_FLOAT = 0x1406
 GL_LINES = 0x0001
+GL_TRIANGLES = 0x0004
 GL_COLOR_BUFFER_BIT = 0x00004000
 GL_DEPTH_BUFFER_BIT = 0x00000100
 GL_DEPTH_TEST = 0x0B71
 GL_BLEND = 0x0BE2
 GL_SRC_ALPHA = 0x0302
 GL_ONE_MINUS_SRC_ALPHA = 0x0303
+GL_POLYGON_OFFSET_FILL = 0x8037
 
 
 SHADER_DIR = Path(__file__).resolve().parents[1] / "resources" / "shaders"
@@ -95,6 +97,39 @@ def _axes_vertices(length: float = 10.0) -> array:
         0.0, 0.0, 0.0,  0.0, length, 0.0,
         0.0, 0.0, 0.0,  0.0, 0.0, length,
     ])
+
+
+def _ray_triangle(
+    origin: QVector3D,
+    direction: QVector3D,
+    v0: QVector3D,
+    v1: QVector3D,
+    v2: QVector3D,
+) -> Optional[float]:
+    """Möller–Trumbore ray / triangle intersection. Returns distance ``t``
+    along the ray, or ``None`` for a miss / behind-camera hit. The triangle
+    is intersected from both sides — front/back orientation does not matter
+    because Wasia doesn't (yet) cull back faces."""
+    eps = 1e-6
+    e1 = v1 - v0
+    e2 = v2 - v0
+    h = QVector3D.crossProduct(direction, e2)
+    a = QVector3D.dotProduct(e1, h)
+    if abs(a) < eps:
+        return None
+    f = 1.0 / a
+    s = origin - v0
+    u = f * QVector3D.dotProduct(s, h)
+    if u < 0.0 or u > 1.0:
+        return None
+    q = QVector3D.crossProduct(s, e1)
+    v = f * QVector3D.dotProduct(direction, q)
+    if v < 0.0 or u + v > 1.0:
+        return None
+    t = f * QVector3D.dotProduct(e2, q)
+    if t < eps:
+        return None
+    return t
 
 
 def _point_to_segment_distance_2d(p, a, b) -> float:
@@ -161,6 +196,9 @@ class Viewport(QOpenGLWidget):
         self._selected_vao = None
         self._selected_vbo = None
         self._selected_count = 0
+        self._faces_vao = None
+        self._faces_vbo = None
+        self._faces_count = 0
         self._edges_version = -1
 
         self._rubber_vao = None
@@ -194,6 +232,7 @@ class Viewport(QOpenGLWidget):
 
         self._edges_vao, self._edges_vbo = self._create_dynamic()
         self._selected_vao, self._selected_vbo = self._create_dynamic()
+        self._faces_vao, self._faces_vbo = self._create_dynamic()
         self._rubber_vao, self._rubber_vbo = self._create_dynamic()
 
     def resizeGL(self, w: int, h: int) -> None:
@@ -217,8 +256,19 @@ class Viewport(QOpenGLWidget):
         self._gl.glDrawArrays(GL_LINES, 0, self._grid_count)
         self._grid_vao.release()
 
-        # Persistent edges
+        # Persistent edges + faces
         self._sync_edges()
+
+        # Faces — drawn before edges, with polygon offset so coincident
+        # boundary edges sit cleanly on top instead of z-fighting.
+        if self._faces_count > 0:
+            self._gl.glEnable(GL_POLYGON_OFFSET_FILL)
+            self._gl.glPolygonOffset(1.0, 1.0)
+            self._set_color(0.92, 0.89, 0.81, 1.0)  # warm cream (SketchUp-ish)
+            self._faces_vao.bind()
+            self._gl.glDrawArrays(GL_TRIANGLES, 0, self._faces_count)
+            self._faces_vao.release()
+            self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
         if self._edges_count > 0:
             self._set_color(0.13, 0.17, 0.23, 1.0)
             self._edges_vao.bind()
@@ -349,6 +399,27 @@ class Viewport(QOpenGLWidget):
         self._selected_vbo.release()
         self._selected_count = len(sel_data) // 3
 
+        # Faces: fan-triangulate each face and concatenate into a single VBO.
+        face_data = array("f")
+        for face in self.scene.faces:
+            v = face.vertices
+            if len(v) < 3:
+                continue
+            for i in range(1, len(v) - 1):
+                face_data.extend([
+                    v[0].x(), v[0].y(), v[0].z(),
+                    v[i].x(), v[i].y(), v[i].z(),
+                    v[i + 1].x(), v[i + 1].y(), v[i + 1].z(),
+                ])
+        self._faces_vbo.bind()
+        if face_data:
+            face_raw = face_data.tobytes()
+            self._faces_vbo.allocate(face_raw, len(face_raw))
+        else:
+            self._faces_vbo.allocate(24)
+        self._faces_vbo.release()
+        self._faces_count = len(face_data) // 3
+
         self._edges_version = self.scene.version
         self.sceneVersionChanged.emit(self._edges_version)
 
@@ -441,16 +512,27 @@ class Viewport(QOpenGLWidget):
         tool = self.active_tool
         if tool is None:
             return
-        segments = tool.rubber_band_lines()
-        # Only meaningful for single-segment previews (line tool, VCB).
-        if len(segments) != 1:
-            return
-        start, hover = segments[0]
-        mid_world = QVector3D(
-            (start.x() + hover.x()) * 0.5,
-            (start.y() + hover.y()) * 0.5,
-            (start.z() + hover.z()) * 0.5,
-        )
+
+        # Tool-provided label takes priority (e.g. PushPullTool's signed
+        # extrusion distance). Otherwise fall back to the single-segment
+        # length used by LineTool.
+        label_provider = getattr(tool, "value_label", None)
+        if callable(label_provider):
+            result = label_provider()
+            if result is None:
+                return
+            text, mid_world = result
+        else:
+            segments = tool.rubber_band_lines()
+            if len(segments) != 1:
+                return
+            start, hover = segments[0]
+            text = f"{(hover - start).length():.2f} m"
+            mid_world = QVector3D(
+                (start.x() + hover.x()) * 0.5,
+                (start.y() + hover.y()) * 0.5,
+                (start.z() + hover.z()) * 0.5,
+            )
         pixel = self._world_to_pixel(mid_world)
         if pixel is None:
             return
@@ -459,8 +541,6 @@ class Viewport(QOpenGLWidget):
             fg = QColor("#0F141B")
             shadow = QColor(255, 220, 130, 235)  # warm tint while typing
         else:
-            length = (hover - start).length()
-            text = f"{length:.2f} m"
             fg = QColor("#0F141B")
             shadow = QColor(255, 255, 255, 220)
         font = QFont()
@@ -605,6 +685,25 @@ class Viewport(QOpenGLWidget):
             if d < best_d:
                 best_d = d
                 best = edge
+        return best
+
+    def pick_face(self, screen_x: float, screen_y: float):
+        """Return the front-most face the cursor ray hits, or ``None``."""
+        origin, direction = self._pixel_to_ray(screen_x, screen_y)
+        if origin is None or direction is None:
+            return None
+        best_t = float("inf")
+        best = None
+        for face in self.scene.faces:
+            v = face.vertices
+            if len(v) < 3:
+                continue
+            for i in range(1, len(v) - 1):
+                t = _ray_triangle(origin, direction, v[0], v[i], v[i + 1])
+                if t is not None and t < best_t:
+                    best_t = t
+                    best = face
+                    break  # triangles of one face are coplanar
         return best
 
     # ---- Tool management ----------------------------------------------------
