@@ -1,0 +1,1 @@
+"""Wasia automated tests."""

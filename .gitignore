@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.spec
+
+# IDE / editor
+.vscode/
+.idea/
+*.sublime-*
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime
+*.log
+license.json
+update_state.json
+
+# Local agent state
+.claude/

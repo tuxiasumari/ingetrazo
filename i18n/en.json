@@ -1,0 +1,11 @@
+{
+  "app.name": "Wasia",
+  "app.tagline": "Free 3D modeler for architecture and 3D printing",
+  "menu.file": "File",
+  "menu.edit": "Edit",
+  "menu.view": "View",
+  "menu.tools": "Tools",
+  "menu.window": "Window",
+  "menu.help": "Help",
+  "status.ready": "Ready"
+}

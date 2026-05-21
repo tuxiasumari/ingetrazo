@@ -1,0 +1,11 @@
+{
+  "app.name": "Wasia",
+  "app.tagline": "Modelador 3D libre para arquitectura e impresión 3D",
+  "menu.file": "Archivo",
+  "menu.edit": "Editar",
+  "menu.view": "Vista",
+  "menu.tools": "Herramientas",
+  "menu.window": "Ventana",
+  "menu.help": "Ayuda",
+  "status.ready": "Listo"
+}
