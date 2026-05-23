@@ -77,7 +77,7 @@ Modelador 3D estilo SketchUp orientado a arquitectura, ingeniería civil e impre
     - Convención para futuros tools (circle, polygon, arc, …): declarar `self.work_plane = None` + limpiar en `_reset()`; usar `_plane_axes` para derivar ejes en el plano en vez de hardcodear XY.
 
 ### ✅ Sesión 2026-05-23 — rename a IngeTrazo
-17. **Wasia → IngeTrazo** — proyecto renombrado para entrar al ecosistema visual de IngePresupuestos. Cambios:
+17. **Wasia → IngeTrazo** (`b326c7d`) — proyecto renombrado para entrar al ecosistema visual de IngePresupuestos. Cambios:
     - Marca del producto: `Wasia` → `IngeTrazo` en README, CONTRIBUTING, CODE_OF_CONDUCT, docs/, plugins/README, i18n/{en,es}.json, todas las docstrings de paquetes (`core/`, `views/`, `tools/`, `tests/`, `formats/`), `main.py` (`setApplicationName`, `setOrganizationName`, copyright header), `views/main_window.py` (window title, dialog titles, "Quit IngeTrazo?").
     - Extensión nativa: `.wasia` → `.igz` (3 letras, las iniciales de **I**nge**G**z donde la "g" puede leerse como "geometría" o como sufijo arbitrario; se descartó `.itz` por choques con formatos legacy de InterTrust DRM aunque ambas tienen overlaps menores). Cambios en `views/main_window.py` (filter, suffix check, default name `untitled.igz`) y `formats/__init__.py`.
     - Módulo: `formats/wasia.py` → `formats/igz.py` (git mv, history preservada). Import en `views/main_window.py`: `from formats import igz as igz_format`. Constante `WASIA_FILE_FILTER` → `IGZ_FILE_FILTER`.
@@ -140,6 +140,20 @@ python main.py
 ```
 
 Python 3.14.4 · venv local en `/home/sumaritux/wasia/venv/` (gitignored).
+
+---
+
+## Portabilidad / Plataformas ARM
+
+Stack diseñado portable, pero hay matices por plataforma — anotados acá para no re-investigar:
+
+- **Linux ARM64** (Asahi Linux en Mac M-series, Pinebook Pro, Raspberry Pi 4/5, Snapdragon X Elite con Linux): ✅ funciona directo. Mesa OpenGL es maduro en aarch64. Los workarounds Wayland (FBO propio con depth, reset de estado GL después de QPainter) protegen igual — el bug raíz es del combo PySide6/Mesa, no específico de x86.
+- **macOS Apple Silicon** (M1/M2/M3/M4): ✅ funciona hoy. PySide6 6.5+ tiene wheels nativos arm64. ⚠️ Apple deprecó OpenGL desde macOS 10.14; sigue funcionando vía Qt RHI (que traduce OpenGL → Metal internamente) o la implementación legacy de Apple. Sin signal inmediato de remoción pero hay riesgo a años vista. Mitigación futura: Qt tiene path automático a Metal cuando suceda, sin requerir cambios en código nuestro.
+- **Windows ARM64** (Surface Pro X, Snapdragon X Elite): ⚠️ Qt 6.8+ tiene wheels oficiales arm64, pero ecosistema menos pulido. Probable fricción con deps C nativas. Baja prioridad para testing — público chico, no es ROI mientras seamos solo dev.
+
+**Python 3.14 + ARM = la fricción real más probable.** Las wheels de deps nativas grandes (`ifcopenshell`, `manifold3d`, `pyassimp`) suelen lagear en versiones nuevas de Python. Cuando integremos IFC en serio, plan de contingencia: declarar **Python 3.13 como "versión de referencia para wheels ARM"** mientras 3.14 madura su ecosistema. `ifcopenshell` es históricamente el más lento en publicar wheels para combinaciones nuevas — vigilar ese específicamente.
+
+El código propio está limpio de asunciones x86: shaders GLSL 3.30 Core, math vía QtGui (sin numpy ni intrinsics), sin syscalls específicos de plataforma. La portabilidad real depende de wheels de terceros, no del motor.
 
 ---
 
