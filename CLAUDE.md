@@ -154,6 +154,25 @@ Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir mod
 
 > El registro de *lo hecho* vive en los commits de git (bitácora automática); este archivo guarda el *rumbo* (fases + DoD). No duplicar en el .md lo que git ya registra.
 
+### 🏠 Cronograma "Casita" — capa operativa sobre las fases (definida 2026-06-06)
+
+**Cómo trabajar el motor:** una casita mínima como **banco de pruebas vivo**. En vez de elegir features desde la lista abstracta de fases, **se dibuja la casita y los gaps aparecen solos** — así fue toda la sesión que cerró la Fase 1 (dibujar → encontrar el bug → arreglar). Es el "filtro maestro" del proyecto vuelto concreto, y encaja con la filosofía "trazar como en la vida real". Esto **no reemplaza** las fases ni sus DoD: las **reordena** y agrega un DoD de *integración*. Ver memoria de Claude `[[feedback-casita-dogfooding-driven]]`.
+
+**Arrancar cada sesión preguntando: "¿qué parte de la casita todavía no se puede dibujar?"** y atacar eso.
+
+| Hito de la casita | Qué fuerza | Estado |
+|---|---|---|
+| 0. Huella + caja (rectángulo, extruir) | Rectangle + Push/Pull | ✅ |
+| 1. Muros con espesor (vaciar / anillo) | **Offset (F)** (Fase 4) | ❌ |
+| 2. Vanos: puerta + ventana (push **atravesando**) | **Push/pull pasante (through-hole)** | ❌ gap conocido |
+| 3. Techo a dos aguas (subir el caballete) | **Move (M)** + topología que aguante mover (Fase 3) | ❌ |
+| 4. Tabiques + escalera | Subdivisión + grada solid-aware | ✅ (sesión 2026-06-06) |
+| 5. Acabados (color por cara, cotas) | Materials + Dimensions (Fase 7) | ❌ |
+
+**Reorden que revela la casita:** los bloqueos reales para *producir* una casita son **push/pull pasante** (puerta/ventana) y **Move** (techo) — que el roadmap abstracto tenía más abajo que "Fase 2 Selección". Selección *habilita el flujo* (agarrar caras cómodo) pero pasante + Move *producen la casita*.
+
+**Orden sugerido próxima sesión:** (1) Selección de caras mínima (Fase 2, el habilitador) → (2) push/pull pasante (desbloquea vanos, cierra gap) → (3) Move (desbloquea techo) → recién ahí Offset y acabados. La casita reconocible end-to-end = el hito de integración.
+
 ### 🔮 Roadmap v0.1 (versión inicial usable real)
 Orden sugerido alineado con la visión (freeform + BIM tagging + 2D que emerge del 3D):
 - **Groups / Components** — encapsulación de geometría reutilizable.
