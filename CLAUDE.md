@@ -101,11 +101,10 @@ El 2D separado quedó en el pasado; por eso el referente es SketchUp y no AutoCA
     - Verificación: `python -c "from formats import igz; from views.main_window import MainWindow, IGZ_FILE_FILTER; import main"` retorna OK con filter `"IngeTrazo document (*.igz);;All files (*)"`.
 
 ### 🐛 Conocidos sin resolver
-- **Fan triangulation rompe para polígonos cóncavos** — funciona para rectángulos y convexos. Una L o cualquier no-convexo se triangula mal. Solución: ear-clipping.
+> Los 4 bugs de topología que vivían acá (fan-triangulation cóncava, sin auto-merge, un-solo-ciclo, no divide la madre) quedaron resueltos en la Fase 1 — ver commits `e778a72`..`c48e012`. Lo que sigue abierto:
 - **Sin face culling** — ambos lados de cada cara se renderizan con el mismo color crema. Front/back vs SketchUp: front cream, back azul-grisáceo. Pendiente.
-- **Sin merge de geometría coincidente** — dos rectángulos que comparten arista crean aristas duplicadas. SketchUp auto-suelda.
-- **Auto-polígono encuentra UN solo ciclo** — si una arista cierra múltiples polígonos (clásico: diagonal en cuadrado → 2 triángulos), sólo crea uno (el primero que BFS encuentra). SketchUp crea ambos.
-- **Polígono nuevo dentro de cara existente no la divide** — al dibujar un cuadradito interno en la cara superior de un cubo, se crea la cara nueva pero la grande sigue intacta debajo (dos caras coplanares). Falta split de face: detectar que el ciclo nuevo está contenido en una cara existente y restarlo / triangular el "donut" resultante.
+- **Push/pull "pasante" (through) no se detecta** — empujar una cara atravesando hasta el lado opuesto del sólido cae a una pared en vez de perforar la cara del fondo (agujero pasante). Ver `tools/pushpull.py`.
+- **Solapamiento colineal de aristas no se suelda/parte** — un rectángulo que cubre una arista *completa* de otra cara (los 4 vértices sobre el borde, lado lejano = cuerda colineal) no subdivide; `segment_intersection` excluye colineales a propósito. El caso esquina / parte-de-arista sí funciona.
 
 ### 🚧 Programación secuenciada hacia v0.1 (definida 2026-06-05)
 
@@ -117,9 +116,10 @@ El 2D separado quedó en el pasado; por eso el referente es SketchUp y no AutoCA
 Commitear los cambios sueltos (`tools/line.py`, `tools/rectangle.py`, `views/viewport.py`) + actualizar CLAUDE.md (rename de carpeta ya hecho, venv reparado el 2026-06-05).
 - **DoD:** `git status` limpio, CLAUDE.md refleja la realidad.
 
-**FASE 1 — 🔴 Motor de topología robusto** *(la incógnita go/no-go, ~1-2 semanas)*
-Es la fase que decide si el camino standalone es viable. Con tests en `tests/` (hoy vacía; la regresión topológica es silenciosa). En orden: (1) auto-merge de vértices/aristas coincidentes, (2) split de aristas al cruzarse, (3) split de cara cuando un ciclo nuevo cae dentro, (4) detectar TODOS los ciclos sin caras duplicadas/invertidas, (5) ear-clipping para cóncavos.
-- **DoD:** diagonal en cuadrado → 2 triángulos · cuadradito dentro de cara → divide la madre · 2 rects que comparten arista → 1 arista, no duplicada · "L" cóncava se rellena · push/pull funciona sobre todas. Reemplaza los 4 bugs de "Conocidos sin resolver" de topología.
+**✅ FASE 1 — Motor de topología robusto** *(cerrada 2026-06-06; era la incógnita go/no-go)*
+Los 5 sub-pasos hechos con tests (`tests/` pasó de vacía a ~99 tests): (1) auto-merge de vértices/aristas coincidentes, (2) split de aristas al cruzarse, (3) split de cara cuando un ciclo nuevo cae dentro, (4) detectar TODOS los ciclos + chord-split, (5) ear-clipping para cóncavos. Triangulación con huecos robusta vía port de **earcut** (`core/triangulate.py`). Motor de comandos de edición en `core/edits.py`; helpers de topología (intersección, contención, chord/chain split, clasificación de aristas) en `core/topology.py`.
+- **DoD (pasa):** diagonal en cuadrado → 2 triángulos · cuadradito dentro de cara → divide la madre · 2 rects que comparten arista → 1 arista · "L" cóncava se rellena · push/pull sobre todas. Reemplaza los 4 bugs de topología de "Conocidos sin resolver".
+- **Bonus de la misma sesión (más allá del DoD):** push/pull **sustractivo y solid-aware** — empujar hacia adentro talla un rebaje (recess) o **corta una grada** rebajando las paredes laterales adyacentes; limpia aristas colgantes y parte las verticales al nivel del corte. Ver `tools/pushpull.py` + commits `40be03a`, `67598c4`, `c551a5a`, `c48e012`.
 
 **FASE 2 — Selección sólida** *(el "feel" SketchUp)*
 Seleccionar caras (click), hover highlight, rubber-band con drag (ventana vs crossing), doble-click=conectado, triple-click=sólido.
@@ -221,10 +221,13 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 ├── README.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
 ├── core/
 │   ├── camera.py              ← OrbitCamera (Z-up, lookAt, perspective/ortho, fit_to, set_view)
-│   ├── geometry.py            ← Edge (eq=False, identity-hashable) + Face (Newell normal + centroid)
+│   ├── geometry.py            ← Edge (eq=False) + Face (Newell normal + centroid + holes + triangulate)
 │   ├── scene.py               ← Scene (edges, faces, selection, version, bounds)
 │   ├── snap.py                ← compute_snap(...) — 7 tipos de snap con resolver callbacks
-│   └── history.py             ← Command ABC + History (undo/redo) + Add/DeleteEdge/AddFace/Compound
+│   ├── topology.py            ← grafo/geometría: ciclos, intersección, contención, chord/chain split, clasificación de aristas
+│   ├── triangulate.py         ← port de earcut (huecos) + fan convexo; plane_axes, is_convex
+│   ├── edits.py               ← build_add_edge(s): planifica split/weld/auto-face/subdivisión como comandos
+│   └── history.py             ← Command ABC + History (undo/redo) + Add/Delete Edge/Face + Compound + PruneOrphanEdges
 ├── views/
 │   ├── main_window.py         ← QMainWindow + menús (File/Edit/View/Tools) + toolbar + status bar
 │   └── viewport.py            ← QOpenGLWidget — render + paintGL + tools dispatch + VCB + overlays
@@ -233,7 +236,7 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 │   ├── select.py              ← SelectTool (pick edge + Shift-add + Delete)
 │   ├── line.py                ← LineTool (chain + auto-close + VCB float/tuple)
 │   ├── rectangle.py           ← RectangleTool (4 edges + 1 face CompoundCommand)
-│   └── pushpull.py            ← PushPullTool (face hover + drag → extrude)
+│   └── pushpull.py            ← PushPullTool (extrude / recess / step solid-aware vía clasificación de aristas)
 ├── formats/
 │   └── igz.py                 ← save_scene / load_into (JSON `.igz`, schema versionado)
 ├── plugins/                   ← carpeta para complementos de terceros (vacía + README)
@@ -281,7 +284,7 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 
 ## Tests + CI
 
-- `tests/` existe pero está vacía. Pytest planeado, sin tests escritos aún.
+- `tests/` con **~99 tests** pytest (estrenados en la Fase 1, antes vacía). Cubren topología (automerge, edge/face split, chord/chain, multi-ciclo, contención), triangulación con huecos (earcut), subdivisión por borde, y push/pull sustractivo/solid-aware (recess, grada, poda de huérfanos). Correr: `source venv/bin/activate && python -m pytest tests/ -q`. `pytest>=8.0` en `requirements.txt`.
 - GitHub Actions en `.github/workflows/` vacío (pendiente de portar el setup desde IngePresupuestos cuando empecemos a empaquetar releases).
 
 ---
