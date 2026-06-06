@@ -38,7 +38,7 @@ from core.history import (
     CompoundCommand,
     DeleteFaceCommand,
 )
-from core.topology import face_is_bordered
+from core.topology import classify_push_edge, subtract_loop_from_face
 from tools.base import Tool, ToolContext
 
 
@@ -151,34 +151,44 @@ class PushPullTool(Tool):
         base = face.vertices
         top = [v + normal * d for v in base]
         count = len(base)
+        faces = viewport.scene.faces
+
+        # Classify every side edge: coplanar neighbour (inner wall), a
+        # perpendicular face it sits on (the solid's side wall — notch it), or
+        # free (open extrusion). A face whose edges are all attached is part of
+        # a surface/solid, so the push *moves* it (base consumed); a fully
+        # free-standing face is extruded keeping its base as a cap.
+        kinds = [
+            classify_push_edge(face, base[i], base[(i + 1) % count], faces)
+            for i in range(count)
+        ]
+        attached = all(kind != "free" for kind, _ in kinds)
 
         commands: list = []
-
-        # A bordered face (embedded in a surface/solid) is moved by the push,
-        # so its base is consumed — pushing in carves a recess (the
-        # surrounding face keeps its hole as the open mouth), pushing out/
-        # through extends or shortens without leaving an internal cap. A free-
-        # standing face is extruded instead, keeping its base as a cap. This
-        # replaces a sign-of-distance test, which was unreliable because face
-        # normals aren't consistently oriented.
-        if face_is_bordered(face, viewport.scene.faces):
+        if attached:
             commands.append(DeleteFaceCommand(face))
 
-        # Top boundary edges.
+        # Moved boundary + vertical edges, and the moved face (floor / top).
         for i in range(count):
             commands.append(AddEdgeCommand(top[i], top[(i + 1) % count]))
-
-        # Vertical edges (base i to top i).
         for i in range(count):
             commands.append(AddEdgeCommand(base[i], top[i]))
+        commands.append(AddFaceCommand(list(top), auto=not attached))
 
-        # Top face.
-        commands.append(AddFaceCommand(list(top)))
-
-        # Side faces (quads).
+        # Sides: a perpendicular edge notches its wall when the strip falls
+        # inside it (pushing in → a step / recess opening); otherwise a wall
+        # quad is raised (inner wall, free extrusion, or pushing out).
         for i in range(count):
             j = (i + 1) % count
-            commands.append(AddFaceCommand([base[i], base[j], top[j], top[i]]))
+            a, b, b2, a2 = base[i], base[j], top[j], top[i]
+            kind, neighbour = kinds[i]
+            if attached and kind == "perp":
+                remainder = subtract_loop_from_face(neighbour, [a, b, b2, a2])
+                if remainder is not None:
+                    commands.append(DeleteFaceCommand(neighbour))
+                    commands.append(AddFaceCommand(remainder, auto=False))
+                    continue  # notched open — no wall here
+            commands.append(AddFaceCommand([a, b, b2, a2], auto=False))
 
         viewport.history.execute(CompoundCommand(commands))
         self._reset()

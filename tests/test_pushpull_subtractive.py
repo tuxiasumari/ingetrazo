@@ -179,3 +179,48 @@ def test_recess_on_real_cube_end_to_end():
     assert small not in scene.faces            # base consumed
     assert len(top.holes) == 1                 # mouth still open
     assert _has_face_at_z(scene, 1.0, 4)       # recess floor at z=1
+
+
+# ---- solid-aware: a corner step carves the cube ----------------------------
+
+def test_corner_step_notches_adjacent_walls():
+    from core.edits import build_add_edges
+
+    scene = Scene()
+    hist = History(scene)
+    ground = [V(0, 0), V(10, 0), V(10, 10), V(0, 10)]
+    hist.execute(build_add_edges(
+        scene, [(ground[i], ground[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(ground))]))
+    _push(scene, scene.faces[0], 3.0)  # cube, height 3
+
+    top = next(
+        f for f in scene.faces
+        if len(f.vertices) == 4 and all(abs(v.z() - 3) < 1e-9 for v in f.vertices)
+    )
+    # Corner rectangle on the top, sharing parts of two top edges.
+    corner_loop = [V(0, 0, 3), V(4, 0, 3), V(4, 4, 3), V(0, 4, 3)]
+    hist.execute(build_add_edges(
+        scene, [(corner_loop[i], corner_loop[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(corner_loop))]))
+    corner = next(
+        f for f in scene.faces
+        if all(abs(v.z() - 3) < 1e-9 for v in f.vertices) and len(f.vertices) == 4
+        and max(v.x() for v in f.vertices) <= 4.001
+        and max(v.y() for v in f.vertices) <= 4.001
+    )
+
+    vp = _push(scene, corner, -1.5)  # push the corner down → step
+
+    assert corner not in scene.faces                       # base consumed
+    assert _has_face_at_z(scene, 1.5, 4)                   # step tread
+    # The two side walls the corner touched are notched into L-shapes.
+    front = [f for f in scene.faces if all(abs(v.y()) < 1e-9 for v in f.vertices)]
+    left = [f for f in scene.faces if all(abs(v.x()) < 1e-9 for v in f.vertices)]
+    assert any(len(f.vertices) == 6 for f in front)        # front wall notched
+    assert any(len(f.vertices) == 6 for f in left)         # left wall notched
+
+    assert vp.history.undo() is True
+    assert corner in scene.faces                           # fully restored
+    assert any(len(f.vertices) == 4 and all(abs(v.y()) < 1e-9 for v in f.vertices)
+               for f in scene.faces)                       # walls back to rects

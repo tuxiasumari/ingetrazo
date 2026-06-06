@@ -141,8 +141,12 @@ class AddFaceCommand(Command):
     this command punched, leaving the mother untouched.
     """
 
-    def __init__(self, vertices: Iterable[QVector3D]) -> None:
+    def __init__(self, vertices: Iterable[QVector3D], auto: bool = True) -> None:
         self.vertices = [QVector3D(v) for v in vertices]
+        # When False, skip the hole/subdivision auto-logic — used by tools
+        # (push/pull) that build faces whose relationships they manage
+        # explicitly and don't want re-interpreted.
+        self.auto = auto
         self.face: Optional[Face] = None
         # Each punch is (face_that_gained_a_hole, the_exact_hole_loop_object),
         # kept for identity-based removal on undo. Covers both directions:
@@ -158,6 +162,10 @@ class AddFaceCommand(Command):
         if self.face is None:
             self.face = Face(list(self.vertices))
         scene.faces.append(self.face)
+
+        if not self.auto:
+            scene.version += 1
+            return
 
         # Direction A: the new face falls inside an existing mother → the
         # mother gains the new loop as a hole.

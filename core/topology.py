@@ -353,6 +353,69 @@ def _loop_edges(loop: list[QVector3D]) -> list[frozenset]:
     ]
 
 
+def _faces_coplanar(n1: QVector3D, n2: QVector3D) -> bool:
+    return abs(QVector3D.dotProduct(n1.normalized(), n2.normalized())) > 0.999
+
+
+def _face_all_edges(face: Face) -> set:
+    edges = set(_loop_edges(face.vertices))
+    for hole in face.holes:
+        edges.update(_loop_edges(hole))
+    return edges
+
+
+def _point_on_seg_incl(pt: QVector3D, p: QVector3D, q: QVector3D,
+                       tol: float = _SPLIT_TOLERANCE) -> bool:
+    """Whether ``pt`` lies on segment ``p``–``q``, endpoints included."""
+    pq = q - p
+    length = pq.length()
+    if length < tol:
+        return same_position(pt, p)
+    t = QVector3D.dotProduct(pt - p, pq) / (length * length)
+    if t < -tol or t > 1.0 + tol:
+        return False
+    return (pt - (p + pq * t)).length() < tol
+
+
+def _segment_on_face_boundary(a: QVector3D, b: QVector3D, face: Face) -> bool:
+    """Whether segment ``a``–``b`` lies on a boundary edge of ``face`` (a
+    possibly-shorter sub-segment of one of its edges)."""
+    n = len(face.vertices)
+    for i in range(n):
+        p = face.vertices[i]
+        q = face.vertices[(i + 1) % n]
+        if _point_on_seg_incl(a, p, q) and _point_on_seg_incl(b, p, q):
+            return True
+    return False
+
+
+def classify_push_edge(
+    face: Face, a: QVector3D, b: QVector3D, faces: Iterable[Face]
+) -> tuple[str, Optional[Face]]:
+    """How a push/pull side edge ``a``–``b`` of ``face`` attaches to the model.
+
+    - ``("coplanar", g)`` — a face on the same plane shares this edge (its
+      boundary or a hole); the push raises an inner wall here.
+    - ``("perp", s)`` — a non-coplanar face carries this edge on its boundary
+      (the solid's side wall); pushing in notches that wall.
+    - ``("free", None)`` — nothing adjacent; a free extrusion edge.
+    """
+    fn = face.normal()
+    eset = frozenset((_key(a), _key(b)))
+    faces = list(faces)
+    for g in faces:
+        if g is face:
+            continue
+        if _faces_coplanar(fn, g.normal()) and eset in _face_all_edges(g):
+            return ("coplanar", g)
+    for s in faces:
+        if s is face or _faces_coplanar(fn, s.normal()):
+            continue
+        if _segment_on_face_boundary(a, b, s):
+            return ("perp", s)
+    return ("free", None)
+
+
 def face_is_bordered(face: Face, faces: Iterable[Face]) -> bool:
     """Whether every boundary edge of ``face`` is also an edge of some other
     face (its boundary or a hole).
