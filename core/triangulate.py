@@ -1,15 +1,14 @@
 """Polygon triangulation, including polygons with holes.
 
 The renderer and the face picker both need triangles, and a face that has
-been divided by an inner loop (a "donut") cannot be fan-triangulated. This
-module turns an outer loop plus zero or more hole loops into a triangle
-list, working in the face's own plane.
+been divided by inner loops (a "donut", or a wall with a window *and* a door)
+cannot be fan-triangulated. This module turns an outer loop plus zero or more
+hole loops into a triangle list, working in the face's own plane.
 
-Algorithm: project to 2D using the face normal, bridge each hole into the
-outer boundary with a zero-width slit (Eberly's mutually-visible-vertex
-method), then ear-clip the resulting simple polygon. Robust enough for the
-nested convex loops IngeTrazo produces today; it also handles concave outer
-loops, which is why ear-clipping (Phase 1, sub-step 5) will reuse it.
+The holed / concave path is a faithful port of the **earcut** ear-clipping
+algorithm (Mapbox, ISC license), which is robust to the cases a hand-rolled
+bridge is not: several holes, holes at the same height, axis-aligned edges,
+and coincident points. Convex hole-free faces keep a trivial O(n) fan.
 
 All math is via ``QVector3D`` / plain tuples — no numpy.
 """
@@ -42,6 +41,10 @@ def plane_axes(normal: QVector3D) -> tuple[QVector3D, QVector3D]:
     return u, v
 
 
+def _cross3(o: Point2, a: Point2, b: Point2) -> float:
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+
 def is_convex(poly: list[Point2]) -> bool:
     """Whether a simple 2D polygon is convex — every turn goes the same way.
 
@@ -54,7 +57,7 @@ def is_convex(poly: list[Point2]) -> bool:
         return True
     sign = 0
     for i in range(n):
-        cr = _cross(poly[i], poly[(i + 1) % n], poly[(i + 2) % n])
+        cr = _cross3(poly[i], poly[(i + 1) % n], poly[(i + 2) % n])
         if cr > _EPS:
             if sign < 0:
                 return False
@@ -64,222 +67,6 @@ def is_convex(poly: list[Point2]) -> bool:
                 return False
             sign = -1
     return True
-
-
-def _signed_area(poly: list[Point2]) -> float:
-    s = 0.0
-    n = len(poly)
-    for i in range(n):
-        x1, y1 = poly[i]
-        x2, y2 = poly[(i + 1) % n]
-        s += x1 * y2 - x2 * y1
-    return 0.5 * s
-
-
-def _cross(o: Point2, a: Point2, b: Point2) -> float:
-    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-
-def _point_in_tri(p: Point2, a: Point2, b: Point2, c: Point2) -> bool:
-    """Inside-or-on test (used by the bridge-visibility search)."""
-    d1 = _cross(a, b, p)
-    d2 = _cross(b, c, p)
-    d3 = _cross(c, a, p)
-    has_neg = (d1 < -_EPS) or (d2 < -_EPS) or (d3 < -_EPS)
-    has_pos = (d1 > _EPS) or (d2 > _EPS) or (d3 > _EPS)
-    return not (has_neg and has_pos)
-
-
-def _same2(p: Point2, q: Point2) -> bool:
-    return abs(p[0] - q[0]) < _EPS and abs(p[1] - q[1]) < _EPS
-
-
-def _blocks_ear(p: Point2, a: Point2, b: Point2, c: Point2) -> bool:
-    """Whether vertex ``p`` prevents triangle ``a,b,c`` from being clipped.
-
-    Inside-or-on the triangle blocks (so a reflex vertex resting on an ear's
-    edge — the concave case — is respected), *except* when ``p`` coincides
-    with one of the triangle's corners. That exception matters for the
-    zero-width bridge slit of a hole, where a corner vertex appears twice
-    under different indices and must not block its own ear.
-    """
-    if _same2(p, a) or _same2(p, b) or _same2(p, c):
-        return False
-    return _point_in_tri(p, a, b, c)
-
-
-def _ear_clip(poly: list[Point2]) -> list[tuple[int, int, int]]:
-    """Triangulate a simple polygon (CCW) → triangles as index triples into
-    ``poly``. O(n²); bails out gracefully on degeneracy rather than looping."""
-    n = len(poly)
-    if n < 3:
-        return []
-    idx = list(range(n))
-    if _signed_area(poly) < 0.0:
-        idx.reverse()
-
-    tris: list[tuple[int, int, int]] = []
-    guard = 0
-    limit = 2 * len(idx) * len(idx) + 8
-    while len(idx) > 3 and guard < limit:
-        guard += 1
-        m = len(idx)
-        ear_found = False
-        for i in range(m):
-            i0 = idx[(i - 1) % m]
-            i1 = idx[i]
-            i2 = idx[(i + 1) % m]
-            a, b, c = poly[i0], poly[i1], poly[i2]
-            if _cross(a, b, c) <= _EPS:  # reflex or collinear → not an ear tip
-                continue
-            blocked = False
-            for j in idx:
-                if j in (i0, i1, i2):
-                    continue
-                if _blocks_ear(poly[j], a, b, c):
-                    blocked = True
-                    break
-            if not blocked:
-                tris.append((i0, i1, i2))
-                del idx[i]
-                ear_found = True
-                break
-        if not ear_found:
-            break
-    if len(idx) == 3:
-        tris.append((idx[0], idx[1], idx[2]))
-    return tris
-
-
-def _find_bridge(merged: list[int], pts2: list[Point2], hole: list[int]) -> Optional[int]:
-    """Eberly's mutually-visible vertex: returns the position in ``merged``
-    of the outer-loop vertex visible from the hole's rightmost vertex.
-
-    ``merged`` holds master indices into ``pts2``; ``hole`` likewise. Returns
-    ``None`` if no visible vertex is found (caller skips that hole)."""
-    # M = hole vertex with max x.
-    m_local = max(range(len(hole)), key=lambda i: pts2[hole[i]][0])
-    M = pts2[hole[m_local]]
-
-    best_x = float("inf")
-    best_pos: Optional[int] = None  # position in merged of the larger-x endpoint
-    inter: Optional[Point2] = None
-    k = len(merged)
-    for i in range(k):
-        a = pts2[merged[i]]
-        b = pts2[merged[(i + 1) % k]]
-        # Edge must straddle M's y for a +x ray hit.
-        if (a[1] > M[1]) == (b[1] > M[1]):
-            continue
-        if abs(b[1] - a[1]) < _EPS:
-            continue
-        ix = a[0] + (b[0] - a[0]) * (M[1] - a[1]) / (b[1] - a[1])
-        if ix < M[0] - _EPS:
-            continue
-        if ix < best_x:
-            best_x = ix
-            inter = (ix, M[1])
-            best_pos = i if a[0] > b[0] else (i + 1) % k
-
-    if best_pos is None or inter is None:
-        return None
-
-    P = pts2[merged[best_pos]]
-    # If the intersection is essentially at P, P is directly visible.
-    if abs(P[0] - inter[0]) < _EPS and abs(P[1] - inter[1]) < _EPS:
-        return best_pos
-
-    # Otherwise check reflex vertices inside triangle (M, inter, P): the one
-    # with the smallest angle to +x from M wins visibility.
-    tri = (M, inter, P)
-    best_angle = float("inf")
-    chosen = best_pos
-    for pos in range(k):
-        cand = pts2[merged[pos]]
-        if cand == P:
-            continue
-        if not _point_in_tri(cand, *tri):
-            continue
-        dx = cand[0] - M[0]
-        dy = cand[1] - M[1]
-        if dx <= _EPS:
-            continue
-        angle = abs(dy) / dx
-        if angle < best_angle:
-            best_angle = angle
-            chosen = pos
-    return chosen
-
-
-def triangulate(
-    outer: list[QVector3D],
-    holes: Optional[list[list[QVector3D]]] = None,
-    normal: Optional[QVector3D] = None,
-) -> list[Tri3]:
-    """Triangulate ``outer`` (a planar loop) minus ``holes``.
-
-    Returns a list of 3D triangles. With no holes and a convex-or-simple
-    outer loop this is equivalent to ear-clipping the projected polygon.
-    """
-    if len(outer) < 3:
-        return []
-    holes = [h for h in (holes or []) if len(h) >= 3]
-    if normal is None:
-        normal = _newell(outer)
-
-    u, v = plane_axes(normal)
-    origin = outer[0]
-
-    def proj(p: QVector3D) -> Point2:
-        rel = p - origin
-        return (QVector3D.dotProduct(rel, u), QVector3D.dotProduct(rel, v))
-
-    # Fast path: a convex outer loop with no holes fans trivially in O(n).
-    # Concave loops fall through to ear-clipping below.
-    if not holes and is_convex([proj(p) for p in outer]):
-        return [(outer[0], outer[i], outer[i + 1]) for i in range(1, len(outer) - 1)]
-
-    # Master vertex tables (3D + 2D), parallel.
-    master3: list[QVector3D] = list(outer)
-    pts2: list[Point2] = [proj(p) for p in outer]
-    outer_idx = list(range(len(outer)))
-
-    # Outer loop CCW.
-    if _signed_area([pts2[i] for i in outer_idx]) < 0.0:
-        outer_idx.reverse()
-
-    hole_index_loops: list[list[int]] = []
-    for h in holes:
-        start = len(master3)
-        master3.extend(h)
-        pts2.extend(proj(p) for p in h)
-        h_idx = list(range(start, start + len(h)))
-        # Holes wound CW (opposite the outer loop).
-        if _signed_area([pts2[i] for i in h_idx]) > 0.0:
-            h_idx.reverse()
-        hole_index_loops.append(h_idx)
-
-    merged = list(outer_idx)
-    # Bridge holes in order of decreasing rightmost x (Eberly).
-    hole_index_loops.sort(
-        key=lambda loop: max(pts2[i][0] for i in loop), reverse=True
-    )
-    for hole in hole_index_loops:
-        pos = _find_bridge(merged, pts2, hole)
-        if pos is None:
-            continue  # un-bridgeable hole; skip it rather than corrupt output
-        m_local = max(range(len(hole)), key=lambda i: pts2[hole[i]][0])
-        hole_rot = hole[m_local:] + hole[:m_local]  # starts at the bridge vertex
-        bridge_vertex = merged[pos]
-        insert = hole_rot + [hole_rot[0], bridge_vertex]
-        merged = merged[: pos + 1] + insert + merged[pos + 1 :]
-
-    poly2 = [pts2[i] for i in merged]
-    tris = _ear_clip(poly2)
-    return [
-        (master3[merged[t[0]]], master3[merged[t[1]]], master3[merged[t[2]]])
-        for t in tris
-    ]
 
 
 def _newell(vertices: list[QVector3D]) -> QVector3D:
@@ -296,3 +83,434 @@ def _newell(vertices: list[QVector3D]) -> QVector3D:
     if n.length() < 1e-9:
         return QVector3D(0.0, 0.0, 1.0)
     return n.normalized()
+
+
+# ---- earcut (Mapbox earcut port, no z-order hashing) -----------------------
+
+class _Node:
+    __slots__ = ("i", "x", "y", "prev", "next", "steiner")
+
+    def __init__(self, i: int, x: float, y: float) -> None:
+        self.i = i
+        self.x = x
+        self.y = y
+        self.prev: Optional[_Node] = None
+        self.next: Optional[_Node] = None
+        self.steiner = False
+
+
+def _insert_node(i: int, x: float, y: float, last: Optional[_Node]) -> _Node:
+    node = _Node(i, x, y)
+    if last is None:
+        node.prev = node
+        node.next = node
+    else:
+        node.next = last.next
+        node.prev = last
+        last.next.prev = node
+        last.next = node
+    return node
+
+
+def _remove_node(node: _Node) -> None:
+    node.next.prev = node.prev
+    node.prev.next = node.next
+
+
+def _signed_area_idx(points: list[Point2], idxs: list[int]) -> float:
+    s = 0.0
+    n = len(idxs)
+    for i in range(n):
+        a = points[idxs[i]]
+        b = points[idxs[(i + 1) % n]]
+        s += (b[0] - a[0]) * (a[1] + b[1])
+    return s
+
+
+def _build_ring(points: list[Point2], idxs: list[int], want_ccw: bool) -> Optional[_Node]:
+    # _signed_area_idx > 0 means clockwise here (shoelace with (x2-x1)(y1+y2)).
+    clockwise = _signed_area_idx(points, idxs) > 0
+    seq = idxs if (clockwise != want_ccw) else list(reversed(idxs))
+    last: Optional[_Node] = None
+    for i in seq:
+        last = _insert_node(i, points[i][0], points[i][1], last)
+    if last is not None and _equals(last, last.next):
+        _remove_node(last)
+        last = last.next
+    return last
+
+
+def _area(p: _Node, q: _Node, r: _Node) -> float:
+    return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y)
+
+
+def _equals(p1: _Node, p2: _Node) -> bool:
+    return p1.x == p2.x and p1.y == p2.y
+
+
+def _sign(x: float) -> int:
+    return (x > 0) - (x < 0)
+
+
+def _filter_points(start: Optional[_Node], end: Optional[_Node] = None) -> Optional[_Node]:
+    if start is None:
+        return start
+    if end is None:
+        end = start
+    p = start
+    while True:
+        again = False
+        if not p.steiner and (_equals(p, p.next) or _area(p.prev, p, p.next) == 0):
+            _remove_node(p)
+            p = end = p.prev
+            if p is p.next:
+                break
+            again = True
+        else:
+            p = p.next
+        if not again and p is end:
+            break
+    return end
+
+
+def _point_in_triangle(ax, ay, bx, by, cx, cy, px, py) -> bool:
+    return (
+        (cx - px) * (ay - py) - (ax - px) * (cy - py) >= 0
+        and (ax - px) * (by - py) - (bx - px) * (ay - py) >= 0
+        and (bx - px) * (cy - py) - (cx - px) * (by - py) >= 0
+    )
+
+
+def _is_ear(ear: _Node) -> bool:
+    a, b, c = ear.prev, ear, ear.next
+    if _area(a, b, c) >= 0:
+        return False  # reflex, not an ear
+    ax, bx, cx = a.x, b.x, c.x
+    ay, by, cy = a.y, b.y, c.y
+    x0 = min(ax, bx, cx)
+    y0 = min(ay, by, cy)
+    x1 = max(ax, bx, cx)
+    y1 = max(ay, by, cy)
+    p = c.next
+    while p is not a:
+        if (
+            x0 <= p.x <= x1
+            and y0 <= p.y <= y1
+            and _point_in_triangle(ax, ay, bx, by, cx, cy, p.x, p.y)
+            and _area(p.prev, p, p.next) >= 0
+        ):
+            return False
+        p = p.next
+    return True
+
+
+def _earcut_linked(ear: Optional[_Node], triangles: list, pass_: int = 0) -> None:
+    if ear is None:
+        return
+    stop = ear
+    while ear.prev is not ear.next:
+        prev = ear.prev
+        nxt = ear.next
+        if _is_ear(ear):
+            triangles.append((prev.i, ear.i, nxt.i))
+            _remove_node(ear)
+            ear = nxt.next
+            stop = nxt.next
+            continue
+        ear = nxt
+        if ear is stop:
+            # No ear found — recover from degeneracies.
+            if pass_ == 0:
+                _earcut_linked(_filter_points(ear), triangles, 1)
+            elif pass_ == 1:
+                ear = _cure_local_intersections(_filter_points(ear), triangles)
+                _earcut_linked(ear, triangles, 2)
+            elif pass_ == 2:
+                _split_earcut(ear, triangles)
+            return
+
+
+def _cure_local_intersections(start: _Node, triangles: list) -> _Node:
+    p = start
+    while True:
+        a = p.prev
+        b = p.next.next
+        if (
+            not _equals(a, b)
+            and _intersects(a, p, p.next, b)
+            and _locally_inside(a, b)
+            and _locally_inside(b, a)
+        ):
+            triangles.append((a.i, p.i, b.i))
+            _remove_node(p)
+            _remove_node(p.next)
+            p = start = b
+        p = p.next
+        if p is start:
+            break
+    return _filter_points(p)
+
+
+def _split_earcut(start: _Node, triangles: list) -> None:
+    a = start
+    while True:
+        b = a.next.next
+        while b is not a.prev:
+            if a.i != b.i and _is_valid_diagonal(a, b):
+                c = _split_polygon(a, b)
+                a = _filter_points(a, a.next)
+                c = _filter_points(c, c.next)
+                _earcut_linked(a, triangles, 0)
+                _earcut_linked(c, triangles, 0)
+                return
+            b = b.next
+        a = a.next
+        if a is start:
+            break
+
+
+def _eliminate_holes(points, hole_indices, outer_node):
+    queue = []
+    total = len(points)
+    for k in range(len(hole_indices)):
+        start = hole_indices[k]
+        end = hole_indices[k + 1] if k + 1 < len(hole_indices) else total
+        idxs = list(range(start, end))
+        h = _build_ring(points, idxs, want_ccw=False)
+        if h is h.next:
+            h.steiner = True
+        queue.append(_get_leftmost(h))
+    queue.sort(key=lambda n: (n.x, n.y))
+    for hole in queue:
+        outer_node = _eliminate_hole(hole, outer_node)
+    return outer_node
+
+
+def _eliminate_hole(hole, outer_node):
+    bridge = _find_hole_bridge(hole, outer_node)
+    if bridge is None:
+        return outer_node
+    bridge_reverse = _split_polygon(bridge, hole)
+    _filter_points(bridge_reverse, bridge_reverse.next)
+    return _filter_points(bridge, bridge.next)
+
+
+def _get_leftmost(start: _Node) -> _Node:
+    p = start
+    leftmost = start
+    while True:
+        if p.x < leftmost.x or (p.x == leftmost.x and p.y < leftmost.y):
+            leftmost = p
+        p = p.next
+        if p is start:
+            break
+    return leftmost
+
+
+def _find_hole_bridge(hole: _Node, outer_node: _Node) -> Optional[_Node]:
+    p = outer_node
+    hx, hy = hole.x, hole.y
+    qx = -float("inf")
+    m: Optional[_Node] = None
+    # Find the edge whose intersection with a +x ray from the hole is closest.
+    while True:
+        if hy <= p.y and hy >= p.next.y and p.next.y != p.y:
+            x = p.x + (hy - p.y) * (p.next.x - p.x) / (p.next.y - p.y)
+            if hx >= x > qx:
+                qx = x
+                m = p if p.x < p.next.x else p.next
+                if x == hx:
+                    return m
+        p = p.next
+        if p is outer_node:
+            break
+    if m is None:
+        return None
+    # Look for a reflex vertex inside the candidate triangle, closer in angle.
+    stop = m
+    mx, my = m.x, m.y
+    tan_min = float("inf")
+    p = m
+    while True:
+        if (
+            hx >= p.x >= mx
+            and hx != p.x
+            and _point_in_triangle(
+                hx if hy < my else qx, hy,
+                mx, my,
+                qx if hy < my else hx, hy,
+                p.x, p.y,
+            )
+        ):
+            tan = abs(hy - p.y) / (hx - p.x)
+            if _locally_inside(p, hole) and (
+                tan < tan_min
+                or (tan == tan_min and (p.x > m.x or (p.x == m.x and _sector_contains(m, p))))
+            ):
+                m = p
+                tan_min = tan
+        p = p.next
+        if p is stop:
+            break
+    return m
+
+
+def _sector_contains(m: _Node, p: _Node) -> bool:
+    return _area(m.prev, m, p.prev) < 0 and _area(p.next, m, m.next) < 0
+
+
+def _locally_inside(a: _Node, b: _Node) -> bool:
+    if _area(a.prev, a, a.next) < 0:
+        return _area(a, b, a.next) >= 0 and _area(a, a.prev, b) >= 0
+    return _area(a, b, a.prev) < 0 or _area(a, a.next, b) < 0
+
+
+def _middle_inside(a: _Node, b: _Node) -> bool:
+    p = a
+    inside = False
+    px = (a.x + b.x) / 2
+    py = (a.y + b.y) / 2
+    while True:
+        if ((p.y > py) != (p.next.y > py)) and p.next.y != p.y and (
+            px < (p.next.x - p.x) * (py - p.y) / (p.next.y - p.y) + p.x
+        ):
+            inside = not inside
+        p = p.next
+        if p is a:
+            break
+    return inside
+
+
+def _is_valid_diagonal(a: _Node, b: _Node) -> bool:
+    return (
+        a.next.i != b.i
+        and a.prev.i != b.i
+        and not _intersects_polygon(a, b)
+        and (
+            _locally_inside(a, b)
+            and _locally_inside(b, a)
+            and _middle_inside(a, b)
+            and (_area(a.prev, a, b.prev) != 0 or _area(a, b.prev, b) != 0)
+            or _equals(a, b)
+            and _area(a.prev, a, a.next) > 0
+            and _area(b.prev, b, b.next) > 0
+        )
+    )
+
+
+def _on_segment(p: _Node, q: _Node, r: _Node) -> bool:
+    return (
+        max(p.x, r.x) >= q.x >= min(p.x, r.x)
+        and max(p.y, r.y) >= q.y >= min(p.y, r.y)
+    )
+
+
+def _intersects(p1: _Node, q1: _Node, p2: _Node, q2: _Node) -> bool:
+    o1 = _sign(_area(p1, q1, p2))
+    o2 = _sign(_area(p1, q1, q2))
+    o3 = _sign(_area(p2, q2, p1))
+    o4 = _sign(_area(p2, q2, q1))
+    if o1 != o2 and o3 != o4:
+        return True
+    if o1 == 0 and _on_segment(p1, p2, q1):
+        return True
+    if o2 == 0 and _on_segment(p1, q2, q1):
+        return True
+    if o3 == 0 and _on_segment(p2, p1, q2):
+        return True
+    if o4 == 0 and _on_segment(p2, q1, q2):
+        return True
+    return False
+
+
+def _intersects_polygon(a: _Node, b: _Node) -> bool:
+    p = a
+    while True:
+        if (
+            p.i != a.i
+            and p.next.i != a.i
+            and p.i != b.i
+            and p.next.i != b.i
+            and _intersects(p, p.next, a, b)
+        ):
+            return True
+        p = p.next
+        if p is a:
+            break
+    return False
+
+
+def _split_polygon(a: _Node, b: _Node) -> _Node:
+    a2 = _Node(a.i, a.x, a.y)
+    b2 = _Node(b.i, b.x, b.y)
+    an = a.next
+    bp = b.prev
+    a.next = b
+    b.prev = a
+    a2.next = an
+    an.prev = a2
+    b2.next = a2
+    a2.prev = b2
+    bp.next = b2
+    b2.prev = bp
+    return b2
+
+
+def earcut(points: list[Point2], hole_indices: Optional[list[int]] = None) -> list[tuple[int, int, int]]:
+    """Triangulate the polygon described by ``points`` + ``hole_indices``.
+
+    ``points`` is the outer ring followed by each hole's vertices; each entry
+    of ``hole_indices`` is the start offset of a hole. Returns triangles as
+    triples of indices into ``points``.
+    """
+    hole_indices = hole_indices or []
+    has_holes = len(hole_indices) > 0
+    outer_len = hole_indices[0] if has_holes else len(points)
+    outer_node = _build_ring(points, list(range(outer_len)), want_ccw=True)
+    triangles: list = []
+    if outer_node is None or outer_node.next is outer_node.prev:
+        return triangles
+    if has_holes:
+        outer_node = _eliminate_holes(points, hole_indices, outer_node)
+    _earcut_linked(outer_node, triangles)
+    return triangles
+
+
+# ---- public entry point ----------------------------------------------------
+
+def triangulate(
+    outer: list[QVector3D],
+    holes: Optional[list[list[QVector3D]]] = None,
+    normal: Optional[QVector3D] = None,
+) -> list[Tri3]:
+    """Triangulate ``outer`` (a planar loop) minus ``holes``.
+
+    Returns a list of 3D triangles. A convex hole-free loop fans in O(n);
+    anything concave or holed goes through earcut.
+    """
+    if len(outer) < 3:
+        return []
+    holes = [h for h in (holes or []) if len(h) >= 3]
+    if normal is None:
+        normal = _newell(outer)
+
+    u, v = plane_axes(normal)
+    origin = outer[0]
+
+    def proj(p: QVector3D) -> Point2:
+        rel = p - origin
+        return (QVector3D.dotProduct(rel, u), QVector3D.dotProduct(rel, v))
+
+    if not holes and is_convex([proj(p) for p in outer]):
+        return [(outer[0], outer[i], outer[i + 1]) for i in range(1, len(outer) - 1)]
+
+    master3: list[QVector3D] = list(outer)
+    pts2: list[Point2] = [proj(p) for p in outer]
+    hole_indices: list[int] = []
+    for h in holes:
+        hole_indices.append(len(master3))
+        master3.extend(h)
+        pts2.extend(proj(p) for p in h)
+
+    tris = earcut(pts2, hole_indices)
+    return [(master3[a], master3[b], master3[c]) for a, b, c in tris]

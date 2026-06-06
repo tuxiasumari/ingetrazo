@@ -189,6 +189,36 @@ def test_triangulate_rotated_donut():
     assert abs(_total_area(triangulate(outer, [hole])) - 12.0) < 1e-6
 
 
+def test_triangulate_two_aligned_holes():
+    # Window + door at the same height — the case a hand-rolled bridge bungled.
+    outer = [V(0, 0), V(10, 0), V(10, 5), V(0, 5)]
+    window = [V(1, 1), V(3, 1), V(3, 3), V(1, 3)]
+    door = [V(5, 1), V(7, 1), V(7, 3), V(5, 3)]
+    assert abs(_total_area(triangulate(outer, [window, door])) - (50 - 4 - 4)) < 1e-6
+
+
+def test_triangulate_three_holes():
+    outer = [V(0, 0), V(10, 0), V(10, 5), V(0, 5)]
+    holes = [
+        [V(1, 1), V(3, 1), V(3, 3), V(1, 3)],
+        [V(5, 1), V(7, 1), V(7, 3), V(5, 3)],
+        [V(8, 0.5), V(9, 0.5), V(9, 4.5), V(8, 4.5)],
+    ]
+    assert abs(_total_area(triangulate(outer, holes)) - (50 - 4 - 4 - 4)) < 1e-6
+
+
+def test_two_rectangles_inside_face_punch_two_holes():
+    # End to end: a wall face gains a window hole and a door hole; it must
+    # still triangulate (not vanish).
+    scene, hist = _history()
+    hist.execute(AddFaceCommand([V(0, 0), V(10, 0), V(10, 5), V(0, 5)]))
+    wall = scene.faces[0]
+    hist.execute(AddFaceCommand([V(1, 1), V(3, 1), V(3, 3), V(1, 3)]))   # window
+    hist.execute(AddFaceCommand([V(5, 1), V(7, 1), V(7, 3), V(5, 3)]))   # door
+    assert len(wall.holes) == 2
+    assert abs(_total_area(wall.triangulate()) - 42.0) < 1e-6
+
+
 def test_igz_roundtrip_preserves_holes(tmp_path):
     from formats import igz
 
