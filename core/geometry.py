@@ -73,16 +73,14 @@ class Face:
     def triangulate(self) -> list[tuple[QVector3D, QVector3D, QVector3D]]:
         """Triangles covering this face (outer loop minus any holes).
 
-        Fast path: a face with no holes uses a fan, identical to the legacy
-        behaviour, so existing convex faces pay nothing new. Holed faces go
-        through the hole-aware triangulator.
+        Delegates to :mod:`core.triangulate`, which fans a convex loop, ear-
+        clips a concave one, and bridges holes when present — so a concave or
+        holed face renders and picks correctly while convex faces keep the
+        cheap fan path.
         """
-        v = self.vertices
-        if len(v) < 3:
+        if len(self.vertices) < 3:
             return []
-        if not self.holes:
-            return [(v[0], v[i], v[i + 1]) for i in range(1, len(v) - 1)]
         # Imported lazily to keep geometry.py dependency-light at import time.
         from core.triangulate import triangulate
 
-        return triangulate(v, self.holes, self.normal())
+        return triangulate(self.vertices, self.holes, self.normal())

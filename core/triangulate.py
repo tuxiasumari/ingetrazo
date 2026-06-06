@@ -42,6 +42,30 @@ def plane_axes(normal: QVector3D) -> tuple[QVector3D, QVector3D]:
     return u, v
 
 
+def is_convex(poly: list[Point2]) -> bool:
+    """Whether a simple 2D polygon is convex — every turn goes the same way.
+
+    Collinear vertices (a split point left on a straight edge) are ignored, so
+    a rectangle that gained a mid-edge vertex still counts as convex and keeps
+    the cheap fan path. Triangles are trivially convex.
+    """
+    n = len(poly)
+    if n < 4:
+        return True
+    sign = 0
+    for i in range(n):
+        cr = _cross(poly[i], poly[(i + 1) % n], poly[(i + 2) % n])
+        if cr > _EPS:
+            if sign < 0:
+                return False
+            sign = 1
+        elif cr < -_EPS:
+            if sign > 0:
+                return False
+            sign = -1
+    return True
+
+
 def _signed_area(poly: list[Point2]) -> float:
     s = 0.0
     n = len(poly)
@@ -209,6 +233,11 @@ def triangulate(
     def proj(p: QVector3D) -> Point2:
         rel = p - origin
         return (QVector3D.dotProduct(rel, u), QVector3D.dotProduct(rel, v))
+
+    # Fast path: a convex outer loop with no holes fans trivially in O(n).
+    # Concave loops fall through to ear-clipping below.
+    if not holes and is_convex([proj(p) for p in outer]):
+        return [(outer[0], outer[i], outer[i + 1]) for i in range(1, len(outer) - 1)]
 
     # Master vertex tables (3D + 2D), parallel.
     master3: list[QVector3D] = list(outer)
