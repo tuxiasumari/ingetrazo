@@ -142,8 +142,19 @@ class AddFaceCommand(Command):
     this command punched, leaving the mother untouched.
     """
 
-    def __init__(self, vertices: Iterable[QVector3D], auto: bool = True) -> None:
+    def __init__(
+        self,
+        vertices: Iterable[QVector3D],
+        auto: bool = True,
+        holes: Optional[Iterable[Iterable[QVector3D]]] = None,
+    ) -> None:
         self.vertices = [QVector3D(v) for v in vertices]
+        # Pre-set holes (e.g. extending a holed wall via push/pull). Copied so
+        # the new face owns its loops. Only meaningful with auto=False, where
+        # the face's relationships are managed by the caller.
+        self.preset_holes = (
+            [[QVector3D(v) for v in loop] for loop in holes] if holes else None
+        )
         # When False, skip the hole/subdivision auto-logic — used by tools
         # (push/pull) that build faces whose relationships they manage
         # explicitly and don't want re-interpreted.
@@ -161,7 +172,11 @@ class AddFaceCommand(Command):
 
     def do(self, scene) -> None:
         if self.face is None:
-            self.face = Face(list(self.vertices))
+            holes = (
+                [list(loop) for loop in self.preset_holes]
+                if self.preset_holes else []
+            )
+            self.face = Face(list(self.vertices), holes)
         scene.faces.append(self.face)
 
         if not self.auto:
@@ -192,12 +207,26 @@ class AddFaceCommand(Command):
         # face stands on its own. Only when no hole relationship applied.
         if not self._punches:
             for other in list(scene.faces):
-                if other is self.face or other.holes:
+                if other is self.face:
                     continue
                 remainder = subtract_loop_from_face(other, self.face.vertices)
                 if remainder is None:
                     continue
-                rem_face = Face(list(remainder))
+                # Carry the mother's holes (e.g. a window already on the wall)
+                # into the remainder. If a hole isn't wholly inside it — it would
+                # straddle the cut or fall in the new sub-region — don't
+                # subdivide this face; that's safer than a broken split.
+                rem_holes: list[list[QVector3D]] = []
+                straddle = False
+                for hole in other.holes:
+                    if loop_inside_face(Face(list(remainder)), hole):
+                        rem_holes.append([QVector3D(v) for v in hole])
+                    else:
+                        straddle = True
+                        break
+                if straddle:
+                    continue
+                rem_face = Face(list(remainder), rem_holes)
                 scene.faces.remove(other)
                 scene.faces.append(rem_face)
                 self._subdiv_mother = other

@@ -39,7 +39,11 @@ from core.history import (
     DeleteFaceCommand,
     PruneOrphanEdgesCommand,
 )
-from core.topology import classify_push_edge, subtract_loop_from_face
+from core.topology import (
+    classify_push_edge,
+    extend_wall_edge,
+    subtract_loop_from_face,
+)
 from tools.base import Tool, ToolContext
 
 
@@ -184,6 +188,22 @@ class PushPullTool(Tool):
             a, b, b2, a2 = base[i], base[j], top[j], top[i]
             kind, neighbour = kinds[i]
             if attached and kind == "perp":
+                # Extending a prism: the wall this edge sits on grows in its own
+                # plane. Move the wall's shared edge up rather than stacking a
+                # coplanar strip, so no seam is left at the old cap level.
+                extended = extend_wall_edge(neighbour, a, b, a2, b2)
+                if extended is not None:
+                    commands.append(DeleteFaceCommand(neighbour))
+                    # Carry over any opening (window / door hole) the wall had.
+                    commands.append(AddFaceCommand(
+                        extended, auto=False, holes=neighbour.holes or None
+                    ))
+                    en = len(extended)
+                    for k in range(en):
+                        commands.append(
+                            AddEdgeCommand(extended[k], extended[(k + 1) % en])
+                        )
+                    continue  # wall extended — no separate strip, seam pruned
                 remainder = subtract_loop_from_face(neighbour, [a, b, b2, a2])
                 if remainder is not None:
                     commands.append(DeleteFaceCommand(neighbour))

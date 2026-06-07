@@ -181,6 +181,98 @@ def test_recess_on_real_cube_end_to_end():
     assert _has_face_at_z(scene, 1.0, 4)       # recess floor at z=1
 
 
+# ---- extend a prism: re-pushing a cap leaves no seam -----------------------
+
+def test_repush_top_extends_walls_no_seam():
+    """Extrude a square into a box, then push the top up again. The box should
+    just get taller — the walls extend in place, leaving no ring of edges at
+    the old cap level (the seam the naive 'stack a coplanar strip' produced)."""
+    from core.edits import build_add_edges
+
+    scene = Scene()
+    hist = History(scene)
+    ground = [V(0, 0), V(4, 0), V(4, 4), V(0, 4)]
+    hist.execute(build_add_edges(
+        scene, [(ground[i], ground[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(ground))]))
+    _push(scene, scene.faces[0], 2.0)  # cube, height 2
+
+    top = next(
+        f for f in scene.faces
+        if len(f.vertices) == 4 and all(abs(v.z() - 2) < 1e-9 for v in f.vertices)
+    )
+    vp = _push(scene, top, 2.0)  # push the top up again → height 4
+
+    # A clean taller box: same 6 faces / 12 edges as a single-extrusion cube.
+    assert len(scene.faces) == 6
+    assert all(len(f.vertices) == 4 for f in scene.faces)
+    assert len(scene.edges) == 12
+    # No seam: nothing left at the old cap level z=2.
+    assert not any(abs(e.a.z() - 2) < 1e-9 or abs(e.b.z() - 2) < 1e-9
+                   for e in scene.edges)
+    # Walls span the full new height.
+    assert _has_face_at_z(scene, 4.0, 4)   # new top
+    assert _has_face_at_z(scene, 0.0, 4)   # original base kept
+
+    # Undo brings the cap back to the old level.
+    assert vp.history.undo() is True
+    assert any(len(f.vertices) == 4 and all(abs(v.z() - 2) < 1e-9 for v in f.vertices)
+               for f in scene.faces)
+
+
+def test_repush_top_extends_holed_wall_keeping_opening():
+    """Cube with a window opening on one wall, then push the roof up. The wall
+    carrying the window must extend with the rest — keeping its hole and
+    leaving no seam at the old cap level (the bug: a holed wall fell back to
+    stacking a coplanar strip)."""
+    from core.edits import build_add_edges
+
+    scene = Scene()
+    hist = History(scene)
+    ground = [V(0, 0), V(4, 0), V(4, 4), V(0, 4)]
+    hist.execute(build_add_edges(
+        scene, [(ground[i], ground[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(ground))]))
+    _push(scene, scene.faces[0], 3.0)  # cube, front wall at y=0
+
+    front = next(
+        f for f in scene.faces
+        if all(abs(v.y()) < 1e-9 for v in f.vertices) and len(f.vertices) == 4
+    )
+    # Window strictly inside the front wall → punches a hole.
+    win = [V(1, 0, 1), V(3, 0, 1), V(3, 0, 2), V(1, 0, 2)]
+    hist.execute(build_add_edges(
+        scene, [(win[i], win[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(win))]))
+    assert len(front.holes) == 1
+    winface = next(
+        f for f in scene.faces
+        if all(abs(v.y()) < 1e-9 for v in f.vertices) and len(f.vertices) == 4
+        and f is not front
+    )
+    _push(scene, winface, 0.5)  # recess the window
+    assert len(front.holes) == 1
+
+    top = next(
+        f for f in scene.faces
+        if len(f.vertices) == 4 and all(abs(v.z() - 3) < 1e-9 for v in f.vertices)
+    )
+    _push(scene, top, 2.0)  # raise the roof to z=5
+
+    fronts = [f for f in scene.faces if all(abs(v.y()) < 1e-9 for v in f.vertices)]
+    # Exactly one face on the front plane: the wall, extended, still holed.
+    assert len(fronts) == 1
+    assert len(fronts[0].holes) == 1
+    assert max(v.z() for v in fronts[0].vertices) == 5.0
+    # No seam ring at the old cap level on the front plane.
+    seam = [
+        e for e in scene.edges
+        if abs(e.a.y()) < 1e-9 and abs(e.b.y()) < 1e-9
+        and abs(e.a.z() - 3) < 1e-9 and abs(e.b.z() - 3) < 1e-9
+    ]
+    assert seam == []
+
+
 # ---- solid-aware: a corner step carves the cube ----------------------------
 
 def test_corner_step_notches_adjacent_walls():

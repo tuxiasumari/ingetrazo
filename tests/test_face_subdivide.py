@@ -25,6 +25,50 @@ def V(x: float, y: float, z: float = 0.0) -> QVector3D:
     return QVector3D(float(x), float(y), float(z))
 
 
+def _key_set(loop):
+    from core.topology import _key
+    return frozenset(_key(v) for v in loop)
+
+
+def test_subdivide_face_that_already_has_a_hole():
+    """Draw a window on a wall (punches a hole), then draw a door resting on the
+    wall's bottom edge. The door must still subdivide the (now holed) wall: the
+    door becomes its own face and the wall becomes the remainder, which keeps
+    the window hole. Regression: previously a holed mother was skipped, so the
+    door overlapped the intact wall instead of cutting it."""
+    scene = Scene()
+    hist = History(scene)
+    wall = [V(0, 0), V(4, 0), V(4, 3), V(0, 3)]  # 4 × 3 wall on the XY plane
+    hist.execute(AddFaceCommand(list(wall)))
+    wall_face = scene.faces[0]
+
+    # Window strictly inside → punches a hole in the wall.
+    window = [V(2.5, 1.5), V(3.5, 1.5), V(3.5, 2.5), V(2.5, 2.5)]
+    hist.execute(AddFaceCommand(list(window)))
+    assert len(wall_face.holes) == 1
+
+    # Door resting on the bottom edge (two corners on it, two inside).
+    door = [V(1, 0), V(2, 0), V(2, 2), V(1, 2)]
+    hist.execute(AddFaceCommand(list(door)))
+
+    door_keys = _key_set(door)
+    door_face = next((f for f in scene.faces if _key_set(f.vertices) == door_keys), None)
+    assert door_face is not None                      # door is its own face
+    assert not door_face.holes
+
+    # The wall became the remainder (notched for the door) and kept the window.
+    remainder = next(
+        f for f in scene.faces
+        if f is not door_face and _key_set(f.vertices) != _key_set(window)
+    )
+    assert len(remainder.vertices) == 8               # L/notched outline
+    assert len(remainder.holes) == 1                  # window preserved
+
+    # Undo the door → wall is whole again (still holed), door gone.
+    assert hist.undo() is True
+    assert not any(_key_set(f.vertices) == door_keys for f in scene.faces)
+
+
 def _tri_area(a, b, c) -> float:
     return QVector3D.crossProduct(b - a, c - a).length() * 0.5
 

@@ -600,11 +600,16 @@ def find_subdividing_chain(
 
     This is the "rectangle drawn in a corner / along an edge" case: the loop
     neither sits strictly inside the face (a hole) nor is a single straight
-    chord — it carves a connected sub-region. Faces with holes, loops that
-    poke outside the face, and loops touching the boundary in more than one
-    place are out of scope and return ``None``.
+    chord — it carves a connected sub-region. Loops that poke outside the face,
+    and loops touching the boundary in more than one place are out of scope and
+    return ``None``.
+
+    Holes on ``face`` are allowed and ignored here (the chain only concerns the
+    outer boundary): drawing a door on a wall that already has a window must
+    still subdivide. The caller is responsible for re-assigning each hole to the
+    region that contains it.
     """
-    if face.holes or len(face.vertices) < 3 or len(loop) < 3:
+    if len(face.vertices) < 3 or len(loop) < 3:
         return None
     proj, poly2 = _face_plane_proj(face)
 
@@ -681,6 +686,51 @@ def split_face_by_chain(
     if len(region_pq) < 3 or len(region_qp) < 3:
         return None
     return region_pq, region_qp
+
+
+def extend_wall_edge(
+    face: Face,
+    a: QVector3D,
+    b: QVector3D,
+    a2: QVector3D,
+    b2: QVector3D,
+) -> Optional[list[QVector3D]]:
+    """Grow (or shrink) ``face`` by moving its boundary edge ``a``–``b`` to
+    ``a2``–``b2``, returning the new vertex loop. ``None`` if it doesn't apply.
+
+    This is the push/pull "extend a prism" case: when a cap is pushed further
+    along its normal, each adjacent wall just gets taller in its own plane.
+    Replacing the wall's shared edge keeps it a single face — otherwise a
+    second coplanar strip would be stacked on top, leaving a visible seam at
+    the old cap level.
+
+    Applies only when ``a`` and ``b`` are *both* full vertices of ``face`` and
+    adjacent (so ``a``–``b`` is a real boundary edge, not a sub-segment of a
+    wider wall — that's the notch case, handled elsewhere) and the move keeps
+    the outer loop planar (the extrusion stays in the wall's plane). Any holes
+    the wall carries (a window / door opening) are untouched and must be
+    re-attached by the caller to the extended face."""
+    if len(face.vertices) < 3:
+        return None
+    ka, kb = _key(a), _key(b)
+    ia = ib = None
+    for i, v in enumerate(face.vertices):
+        kv = _key(v)
+        if kv == ka:
+            ia = i
+        elif kv == kb:
+            ib = i
+    if ia is None or ib is None:
+        return None
+    n = len(face.vertices)
+    if not (abs(ia - ib) == 1 or {ia, ib} == {0, n - 1}):
+        return None  # a, b not adjacent → not a single boundary edge
+    new_loop = list(face.vertices)
+    new_loop[ia] = QVector3D(a2)
+    new_loop[ib] = QVector3D(b2)
+    if not is_planar(new_loop):
+        return None  # the move left the wall's plane → not a coplanar extend
+    return new_loop
 
 
 def subtract_loop_from_face(
