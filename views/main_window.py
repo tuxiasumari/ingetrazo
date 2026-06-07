@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from formats import igz as igz_format
 from tools.line import LineTool
+from tools.move import MoveTool
 from tools.pushpull import PushPullTool
 from tools.rectangle import RectangleTool
 from tools.select import SelectTool
@@ -42,6 +43,7 @@ class MainWindow(QMainWindow):
             "line": LineTool(),
             "rectangle": RectangleTool(),
             "pushpull": PushPullTool(),
+            "move": MoveTool(),
         }
         self._tool_actions: dict[str, QAction] = {}
 
@@ -82,6 +84,11 @@ class MainWindow(QMainWindow):
             self._tool_group.addAction(action)
             toolbar.addAction(action)
             self._tool_actions[key] = action
+
+        # Spacebar returns to Select, like SketchUp's pointer. Keep "S" too.
+        select_action = self._tool_actions["select"]
+        select_action.setShortcuts([QKeySequence("S"), QKeySequence(Qt.Key_Space)])
+        select_action.setToolTip("Select (Space / S)")
 
     def _build_menubar(self) -> None:
         menubar = self.menuBar()

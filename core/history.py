@@ -18,6 +18,8 @@ from PySide6.QtGui import QVector3D
 
 from core.geometry import Edge, Face
 from core.topology import (
+    _key,
+    _loop_edges,
     find_containing_face,
     find_duplicate_edge,
     loop_inside_face,
@@ -114,20 +116,49 @@ class AddEdgeCommand(Command):
 
 
 class DeleteEdgesCommand(Command):
-    def __init__(self, edges: Iterable[Edge]) -> None:
+    """Erase edges. A face can't outlive a bounding edge — SketchUp erases an
+    edge and its faces go with it — so every face that used a deleted edge on
+    its outer boundary is removed too (its other edges stay, now free). Hole
+    edges are left alone (deleting a window edge shouldn't drop the whole wall);
+    that merge-back case is handled separately later."""
+
+    def __init__(self, edges: Iterable[Edge], cascade_faces: bool = True) -> None:
         self.edges: list[Edge] = list(edges)
+        # True (user erase): take down faces bounded by a deleted edge.
+        # False (internal edge split): the edge is replaced by collinear
+        # sub-edges, so its faces keep their boundary and must survive.
+        self.cascade_faces = cascade_faces
+        self.removed_faces: list[Face] = []
 
     def do(self, scene) -> None:
         edges_set = set(self.edges)
         scene.edges[:] = [e for e in scene.edges if e not in edges_set]
         for e in self.edges:
             scene.selection.discard(e)
+
+        if not self.cascade_faces:
+            scene.version += 1
+            return
+
+        gone = {frozenset((_key(e.a), _key(e.b))) for e in self.edges}
+        self.removed_faces = [
+            f for f in scene.faces if set(_loop_edges(f.vertices)) & gone
+        ]
+        if self.removed_faces:
+            dead = set(self.removed_faces)
+            scene.faces[:] = [f for f in scene.faces if f not in dead]
+            for f in self.removed_faces:
+                scene.selection.discard(f)
         scene.version += 1
 
     def undo(self, scene) -> None:
         for edge in self.edges:
             if edge not in scene.edges:
                 scene.edges.append(edge)
+        for face in self.removed_faces:
+            if face not in scene.faces:
+                scene.faces.append(face)
+        self.removed_faces = []
         # The original selection is not restored — SketchUp behaves the same.
         scene.version += 1
 
@@ -276,6 +307,54 @@ class DeleteFaceCommand(Command):
         if self.face not in scene.faces:
             scene.faces.append(self.face)
         scene.version += 1
+
+
+def translate_points(scene, keys: set, delta: QVector3D) -> None:
+    """Shift every edge endpoint / face vertex whose position key is in ``keys``
+    by ``delta`` and bump the scene version.
+
+    Shared by :class:`MoveVerticesCommand` and the Move tool's live preview, so
+    the on-the-fly drag and the committed command move geometry identically.
+    """
+    for e in scene.edges:
+        if _key(e.a) in keys:
+            e.a = e.a + delta
+        if _key(e.b) in keys:
+            e.b = e.b + delta
+    for f in scene.faces:
+        f.vertices = [v + delta if _key(v) in keys else v for v in f.vertices]
+        if f.holes:
+            f.holes = [
+                [v + delta if _key(v) in keys else v for v in loop]
+                for loop in f.holes
+            ]
+    scene.version += 1
+
+
+class MoveVerticesCommand(Command):
+    """Translate every point at a set of positions by ``delta``.
+
+    Move works on *positions*, not entities: every edge endpoint and face
+    vertex (boundary or hole) coincident with one of ``positions`` shifts by
+    the same delta. Because identity-equal entities store separate copies of a
+    shared corner, moving them together is what keeps the mesh connected — drag
+    a ridge edge up and both roof slopes and the gable ends deform with it.
+
+    Topology is not restructured (no merge when a vertex lands on another); that
+    is a follow-up. A moved face may become non-planar, which the Newell normal
+    and the triangulator already tolerate.
+    """
+
+    def __init__(self, positions: Iterable[QVector3D], delta: QVector3D) -> None:
+        self.src = [QVector3D(p) for p in positions]
+        self.delta = QVector3D(delta)
+
+    def do(self, scene) -> None:
+        translate_points(scene, {_key(p) for p in self.src}, self.delta)
+
+    def undo(self, scene) -> None:
+        # After do(), the moved points sit at src + delta; match those to undo.
+        translate_points(scene, {_key(p + self.delta) for p in self.src}, -self.delta)
 
 
 class PruneOrphanEdgesCommand(Command):

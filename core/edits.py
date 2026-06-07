@@ -64,7 +64,9 @@ def plan_edge_commands(
 
         # Replace each crossed existing edge with its two sub-edges.
         for edge, point in edge_cuts.items():
-            commands.append(DeleteEdgesCommand([edge]))
+            # Splitting an edge, not erasing it — the sub-edges keep any face's
+            # boundary intact, so don't cascade-delete faces here.
+            commands.append(DeleteEdgesCommand([edge], cascade_faces=False))
             if edge in simulated:
                 simulated.remove(edge)
             for sa, sb in ((edge.a, point), (point, edge.b)):
