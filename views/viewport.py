@@ -267,6 +267,11 @@ class Viewport(QOpenGLWidget):
         self._last_pos = None
         self._pan_mode = False
 
+        # Rubber-band box selection (left-drag with a box_select tool).
+        self._box_active = False
+        self._box_start: Optional[QPointF] = None
+        self._box_cur: Optional[QPointF] = None
+
         # Numeric value buffer (VCB-style typed length).
         self._value_buffer = ""
 
@@ -703,7 +708,33 @@ class Viewport(QOpenGLWidget):
         else:
             self._draw_inference_label(painter)
 
+        # Rubber-band selection box.
+        self._draw_selection_box(painter)
+
         painter.end()
+
+    def _draw_selection_box(self, painter: QPainter) -> None:
+        if not self._box_active or self._box_start is None or self._box_cur is None:
+            return
+        s, c = self._box_start, self._box_cur
+        if math.hypot(c.x() - s.x(), c.y() - s.y()) < self.BOX_DRAG_THRESHOLD_PX:
+            return
+        rect = QRectF(
+            min(s.x(), c.x()), min(s.y(), c.y()),
+            abs(c.x() - s.x()), abs(c.y() - s.y()),
+        )
+        crossing = (c.x() - s.x()) < 0
+        if crossing:
+            # Crossing: dashed green, selects anything it touches.
+            pen = QPen(QColor(40, 158, 92), 1.5, Qt.DashLine)
+            fill = QColor(40, 158, 92, 28)
+        else:
+            # Window: solid blue, selects only fully enclosed.
+            pen = QPen(QColor(51, 102, 199), 1.5, Qt.SolidLine)
+            fill = QColor(51, 102, 199, 28)
+        painter.setPen(pen)
+        painter.setBrush(fill)
+        painter.drawRect(rect)
 
     def _draw_snap_indicator(self, painter: QPainter, snap: SnapResult) -> None:
         # Axis-lock and inference state is conveyed by the coloured rubber
@@ -1043,6 +1074,7 @@ class Viewport(QOpenGLWidget):
             self.active_tool.on_deactivate(self)
         self.active_tool = tool
         self._hover_entity = None  # stale highlight from the previous tool
+        self.last_snap = None      # stale snap marker from the previous tool
         if tool is not None:
             tool.on_activate(self)
         self.update()
@@ -1060,6 +1092,13 @@ class Viewport(QOpenGLWidget):
             self._pan_mode = bool(ev.modifiers() & Qt.ShiftModifier)
             return
         if ev.button() == Qt.LeftButton and self.active_tool is not None:
+            # Box-select tools defer the decision to release: a tiny drag is a
+            # click, a real drag is a rubber-band box.
+            if self.active_tool.box_select:
+                self._box_active = True
+                self._box_start = ev.position()
+                self._box_cur = ev.position()
+                return
             had_start = getattr(self.active_tool, "start_point", None) is not None
             had_plane = getattr(self.active_tool, "work_plane", None) is not None
             face_at_click = None
@@ -1100,6 +1139,11 @@ class Viewport(QOpenGLWidget):
             self.update()
             return
 
+        if self._box_active:
+            self._box_cur = ev.position()
+            self.update()
+            return
+
         # Track cursor + hover edge so Down can capture a reference edge.
         self._last_mouse_pos = ev.position()
         self._hover_edge = self.pick_edge(ev.position().x(), ev.position().y())
@@ -1113,10 +1157,41 @@ class Viewport(QOpenGLWidget):
         self.active_tool.on_hover(ctx)
         self.update()
 
+    # Below this many pixels of drag, a left press/release is a click, not a box.
+    BOX_DRAG_THRESHOLD_PX = 4.0
+
     def mouseReleaseEvent(self, ev) -> None:
         if ev.button() == Qt.MiddleButton:
             self._last_pos = None
             self._pan_mode = False
+            return
+
+        if ev.button() == Qt.LeftButton and self._box_active:
+            self._box_active = False
+            start = self._box_start
+            end = ev.position()
+            self._box_start = None
+            self._box_cur = None
+            tool = self.active_tool
+            if tool is None or start is None:
+                self.update()
+                return
+            dx = end.x() - start.x()
+            dy = end.y() - start.y()
+            additive = bool(ev.modifiers() & Qt.ShiftModifier)
+            if math.hypot(dx, dy) < self.BOX_DRAG_THRESHOLD_PX:
+                # A click: pick the single entity under the cursor.
+                ctx = self._build_ctx(ev)
+                if ctx is not None:
+                    tool.on_click(ctx)
+            else:
+                rect = (
+                    min(start.x(), end.x()), min(start.y(), end.y()),
+                    max(start.x(), end.x()), max(start.y(), end.y()),
+                )
+                crossing = dx < 0  # right-to-left drag = crossing selection
+                tool.on_box_select(self, rect, crossing, additive)
+            self.update()
 
     def wheelEvent(self, ev) -> None:
         self.camera.zoom(ev.angleDelta().y() / 120.0)
@@ -1200,6 +1275,7 @@ class Viewport(QOpenGLWidget):
         if (
             self._last_mouse_pos is None
             or self.active_tool is None
+            or not self.active_tool.uses_snap
         ):
             return
         from PySide6.QtGui import QGuiApplication
@@ -1282,6 +1358,11 @@ class Viewport(QOpenGLWidget):
             return True
 
         if text and (text.isdigit() or text in (".", ",", ";", " ")):
+            # A field separator (space / ;) with an empty buffer isn't VCB
+            # input — let it fall through so Space can act as the Select
+            # shortcut (SketchUp-style). It only separates fields mid-number.
+            if text in (";", " ") and not self._value_buffer:
+                return False
             # Forbid two decimal separators in the current numeric token.
             if text in (".", ","):
                 tail = self._current_token_tail()
@@ -1333,6 +1414,17 @@ class Viewport(QOpenGLWidget):
         world_raw = self._world_from_pixel(px_x, px_y)
         if world_raw is None:
             return None
+        # Tools that don't snap (Select, Push/Pull) skip the snap engine and its
+        # occlusion raycasts entirely, and show no snap marker.
+        if self.active_tool is not None and not self.active_tool.uses_snap:
+            snap = SnapResult(world_raw, "none")
+            return ToolContext(
+                viewport=self,
+                world=world_raw,
+                screen=ev.position(),
+                modifiers=ev.modifiers(),
+                snap=snap,
+            )
         chain_first = None
         start_pt = None
         if self.active_tool is not None:

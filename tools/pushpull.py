@@ -50,6 +50,7 @@ from tools.base import Tool, ToolContext
 class PushPullTool(Tool):
     name = "Push / Pull"
     shortcut = "U"
+    uses_snap = False  # picks a face to extrude; no snap markers
 
     def __init__(self) -> None:
         self.hovered_face: Face | None = None

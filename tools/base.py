@@ -36,6 +36,14 @@ class Tool(ABC):
     name: str = "Unnamed"
     icon: str | None = None
     shortcut: str | None = None
+    # Drawing tools snap to geometry and show the snap markers/tooltips
+    # (Endpoint, On Edge, On Face, ...). Tools that only pick existing
+    # geometry (Select, Push/Pull) set this False: no snap engine, no markers.
+    uses_snap: bool = True
+    # Tools that support a click-drag rubber-band box (Select). For these the
+    # viewport defers the click to release: a tiny drag is a click (on_click),
+    # a real drag is a box (on_box_select).
+    box_select: bool = False
 
     @abstractmethod
     def on_activate(self, viewport) -> None:
@@ -51,6 +59,13 @@ class Tool(ABC):
 
     def on_hover(self, ctx: ToolContext) -> None:
         """Mouse moved to ``ctx.world`` without a button pressed."""
+
+    def on_box_select(self, viewport, rect, crossing: bool, additive: bool) -> None:
+        """Rubber-band box released. ``rect`` is ``(x0, y0, x1, y1)`` in screen
+        pixels (normalized so x0<=x1, y0<=y1). ``crossing`` is True for a
+        right-to-left drag (select anything the box touches) and False for a
+        left-to-right drag (select only what's fully enclosed). Only tools with
+        ``box_select = True`` receive this."""
 
     def on_cancel(self, viewport) -> None:
         """Esc pressed — abandon any in-progress operation."""
