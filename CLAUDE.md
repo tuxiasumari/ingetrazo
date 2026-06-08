@@ -103,8 +103,8 @@ El 2D separado quedó en el pasado; por eso el referente es SketchUp y no AutoCA
 ### 🐛 Conocidos sin resolver
 > Los 4 bugs de topología que vivían acá (fan-triangulation cóncava, sin auto-merge, un-solo-ciclo, no divide la madre) quedaron resueltos en la Fase 1 — ver commits `e778a72`..`c48e012`. Lo que sigue abierto:
 - **Sin face culling** — ambos lados de cada cara se renderizan con el mismo color crema. Front/back vs SketchUp: front cream, back azul-grisáceo. Pendiente.
-- **Push/pull "pasante" (through) no se detecta** — empujar una cara atravesando hasta el lado opuesto del sólido cae a una pared en vez de perforar la cara del fondo (agujero pasante). Ver `tools/pushpull.py`.
-- **Solapamiento colineal de aristas no se suelda/parte** — un rectángulo que cubre una arista *completa* de otra cara (los 4 vértices sobre el borde, lado lejano = cuerda colineal) no subdivide; `segment_intersection` excluye colineales a propósito. El caso esquina / parte-de-arista sí funciona.
+- ✅ **Push/pull "pasante" (through)** — resuelto (sesión 2026-06-08).
+- ✅ **Solapamiento colineal / T-junctions sin soldar** — resuelto (sesión 2026-06-09) vía `prune_collinear_orphan_edges` + `resolve_tjunctions` en el pase de heal. Ver "Robustez de topología de plantas" arriba.
 
 ### 🚧 Programación secuenciada hacia v0.1 (definida 2026-06-05)
 
@@ -130,13 +130,15 @@ Seleccionar caras (click), hover highlight, rubber-band con drag (ventana vs cro
 Move (M) con snap/inferencia/VCB + copia con Ctrl; Eraser (E) por click y arrastre.
 - **DoD:** muevo y borro con medida exacta y snap; la topología de Fase 1 aguanta los movimientos sin romper caras.
 
-**FASE 4 — Kit de dibujo completo**
+**FASE 4 — Kit de dibujo completo** *(parcial)*
 Circle (C), Arc (A), Offset (F), Tape Measure + guías (T). Usar `tool.work_plane` + `_plane_axes` (ver `[[project-face-plane-inference-done]]`).
+- ✅ **Offset (F)** hecho (`tools/offset.py` + `offset_loop`; push del anillo levanta muros con espesor). Falta Circle/Arc/Tape Measure.
 - **DoD:** círculos, arcos, paralelas y guías sobre cualquier cara.
 
-**FASE 5 — Groups** *(imprescindible cuando el modelo crece; sin esto todo se suelda con todo por el auto-merge de Fase 1)*
-Encapsular geometría aislada + editar dentro del grupo + Outliner básico.
-- **DoD:** agrupo, edito aislado, y al mover el grupo no se pega al resto.
+**✅ FASE 5 — Groups v1** *(hecho 2026-06-08; era la deuda estructural contra la geometría pegajosa)*
+`core/group.py`: cada Group tiene su propio `Mesh` aislado del weld del mesh principal. Make Group (Ctrl+G), Explode (Ctrl+Shift+G), Move como unidad (no arrastra el resto), pick/select/delete como unidad, render + serialización `.igz`.
+- **DoD (pasa):** agrupo, al mover el grupo no se pega al resto.
+- **Pendiente (v2):** **editar dentro del grupo** (doble-click para entrar al contexto), Outliner, y Components (instancias con transform reutilizable — hoy el grupo guarda geometría en coords de mundo).
 
 **FASE 6 — Capas/Tags UI** *(habilita el "2D que emerge")*
 UI sobre `core/layers.py` (ya existe el core): visibilidad/lock por capa.
@@ -163,7 +165,7 @@ Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir mod
 | Hito de la casita | Qué fuerza | Estado |
 |---|---|---|
 | 0. Huella + caja (rectángulo, extruir) | Rectangle + Push/Pull | ✅ |
-| 1. Muros con espesor (vaciar / anillo) | **Offset (F)** (Fase 4) | ❌ |
+| 1. Muros con espesor (vaciar / anillo) | **Offset (F)** (Fase 4) | ✅ (sesión 2026-06-09) |
 | 2. Vanos: puerta + ventana (push **atravesando**) | **Push/pull pasante (through-hole)** | ✅ (sesión 2026-06-08) |
 | 3. Techo a dos aguas (subir el caballete) | **Move (M)** + topología que aguante mover | ✅ (frontón se rellena, gable) |
 | 4. Tabiques + escalera | Subdivisión + grada solid-aware | ✅ (sesión 2026-06-06) |
@@ -171,7 +173,22 @@ Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir mod
 
 **Reorden que revela la casita:** los bloqueos reales para *producir* una casita son **push/pull pasante** (puerta/ventana) y **Move** (techo) — que el roadmap abstracto tenía más abajo que "Fase 2 Selección". Selección *habilita el flujo* (agarrar caras cómodo) pero pasante + Move *producen la casita*.
 
-**Estado casita (2026-06-08):** selección de caras, push/pull pasante (vanos) y Move (techo a dos aguas con frontón relleno) **hechos** — la casita es dibujable reconocible end-to-end. Lo que falta para "presentable": **acabados** (materiales por cara + cotas, Fase 7) y **Offset** para muros tipo anillo (Fase 4).
+**Estado casita (2026-06-09):** huella, **muros con espesor (Offset)**, vanos pasantes, techo a dos aguas, tabiques/escalera, y **Groups** (mover bloques sin pegarse) **hechos**. La casita es dibujable y editable reconocible end-to-end. Lo único que falta para "presentable": **acabados** (materiales por cara + cotas, Fase 7).
+
+### 🩹 Robustez de topología de plantas dibujadas a mano (sesión 2026-06-09)
+
+Dibujar una planta a mano (muros, vanos, paredes perpendiculares) destapaba bugs de topología que rompían el push/pull. Toda esta clase de problemas se cierra con un **pase de "heal"** (`core/topology.py::heal_overlapping_faces`) que corre **automático tras cada dibujar/borrar** (vía `SnapshotCompound`/`EraseSelectionCommand`) y también a mano en **Edit ▸ Heal Overlapping Faces**. Qué arregla, todo validado contra archivos reales `planta`–`planta5`:
+
+- **Caras invertidas** → las voltea (una cara con winding al revés empujaba *hacia adentro*).
+- **Huecos anidados redundantes** → deja solo el exterior (subdividir un anillo acumulaba hueco-dentro-de-hueco).
+- **Madre redundante** → quita la cara grande dejada encima de sus subdivisiones (hole-aware: no borra un anillo legítimo).
+- **Doble cara de puerta** (solapamiento parcial) → **perfora el hueco al muro** en vez de borrar la cara, así la cara de la puerta queda **presente y seleccionable** (para borrarla y abrir el vano). Gateado a modelos **planos** (`_mesh_is_flat`): en 3D no corre (los sólidos apilados anidan caras coplanares legítimamente).
+- **Líneas dobladas colineales** (orphan, border-0) → poda el duplicado (`prune_collinear_orphan_edges`).
+- **T-junctions sin soldar** → `resolve_tjunctions` parte cada arista en los vértices interiores donde otra cara la cruza, así dos paredes **comparten** la frontera (border-2) y borrar la línea divisoria las **fusiona** en vez de borrar una. Cierra el bug viejo "solapamiento colineal no se suelda/parte".
+
+**Undo del dibujo:** los comandos delta del trazo (split/weld/hueco) no componen un inverso limpio → se envuelven en `SnapshotCompound` (snapshot antes/después, restore en undo/redo). Reversión exacta, sin líneas/planos basura.
+
+⏳ **Lo que NO se resolvió (tarea grande para la próxima):** un **planar arrangement rebuild** robusto — recomputar las caras mínimas de un plano desde el grafo de aristas. Se intentó y es **frágil con geometría a mano** (medias-paredes/slivers conectan regiones y el face-traversal colapsa, perdiendo área). Sería el fix de raíz que reemplaza los heurísticos del heal; necesita una sesión dedicada y cuidado con T-junctions/colineales/winding. Por ahora los heals cubren los casos reales.
 
 ### 🔧 Migración del motor a conectividad de vértices compartidos (swap en `main`, 2026-06-08)
 
@@ -252,21 +269,25 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 │   ├── camera.py              ← OrbitCamera (Z-up, lookAt, perspective/ortho, fit_to, set_view)
 │   ├── mesh.py                ← MOTOR NUEVO: Vertex compartido + Edge (incidencia radial) + Face + Mesh (no-manifold). Reemplazando a geometry.py y parte de topology.py — ver docs/halfedge-migration-plan.md
 │   ├── geometry.py            ← motor VIEJO (Edge/Face por copia). En vías de retiro (M3); hoy solo para objetos throwaway de simulación en edits/topology
-│   ├── scene.py               ← Scene (envuelve un Mesh; edges/faces son vistas de solo-lectura sobre él)
-│   ├── snap.py                ← compute_snap(...) — 7 tipos de snap con resolver callbacks
-│   ├── topology.py            ← grafo/geometría: ciclos, intersección, contención, chord/chain split, clasificación de aristas
+│   ├── scene.py               ← Scene (envuelve un Mesh; edges/faces son vistas de solo-lectura; + groups[])
+│   ├── group.py               ← Group (Mesh propio aislado del weld; base de Components)
+│   ├── snap.py                ← compute_snap(...) — snaps + inferencias (extensión, perpendicular con predicción de conexión)
+│   ├── topology.py            ← grafo/geometría: ciclos, intersección, contención, chord/chain split + heal (orient/holes/overlaps/orphans/T-junctions)
 │   ├── triangulate.py         ← port de earcut (huecos) + fan convexo; plane_axes, is_convex
-│   ├── edits.py               ← build_add_edge(s): planifica split/weld/auto-face/subdivisión como comandos
-│   └── history.py             ← Command ABC + History (undo/redo) + Add/Delete Edge/Face + Compound + PruneOrphanEdges
+│   ├── edits.py               ← build_add_edge(s): planifica split/weld/auto-face/subdivisión (envuelto en SnapshotCompound)
+│   └── history.py             ← Command ABC + History (undo/redo) + Add/Delete + Compound + Snapshot* + Group/Heal commands
 ├── views/
-│   ├── main_window.py         ← QMainWindow + menús (File/Edit/View/Tools) + toolbar + status bar
-│   └── viewport.py            ← QOpenGLWidget — render + paintGL + tools dispatch + VCB + overlays
+│   ├── main_window.py         ← QMainWindow + menús (File/Edit[Copy/Cut/Paste/Group/Heal]/View/Tools) + toolbar + status bar
+│   └── viewport.py            ← QOpenGLWidget — render (+grupos) + paintGL + tools dispatch + VCB + clipboard + zoom-al-cursor
 ├── tools/
 │   ├── base.py                ← Tool ABC + ToolContext (viewport, world, screen, modifiers, snap)
-│   ├── select.py              ← SelectTool (pick edge + Shift-add + Delete)
+│   ├── select.py              ← SelectTool (pick edge/face/grupo + Shift-add + Delete + box-select)
 │   ├── line.py                ← LineTool (chain + auto-close + VCB float/tuple)
 │   ├── rectangle.py           ← RectangleTool (4 edges + 1 face CompoundCommand)
-│   └── pushpull.py            ← PushPullTool (extrude / recess / step solid-aware vía clasificación de aristas)
+│   ├── move.py                ← MoveTool (mueve posiciones o un grupo entero; snap/VCB/axis magnético)
+│   ├── offset.py              ← OffsetTool (F) — offset de cara → anillo + cara interna (muros con espesor)
+│   ├── paste.py               ← PasteTool — pega el clipboard siguiendo el cursor
+│   └── pushpull.py            ← PushPullTool (extrude / recess / step / pasante; stitch watertight)
 ├── formats/
 │   └── igz.py                 ← save_scene / load_into (JSON `.igz`, schema versionado)
 ├── plugins/                   ← carpeta para complementos de terceros (vacía + README)
