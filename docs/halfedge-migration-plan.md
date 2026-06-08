@@ -131,6 +131,22 @@ the full refactor, and leaves Level C open without commitment.
     edges, which is stricter and more correct than the legacy model. 142 tests
     pass. `core.geometry` still exists (used only for throwaway simulation
     objects in `edits`/`topology`/push-pull preview) — its removal is M3.
-  - **Next — M3:** drop `core.geometry` and the `_key` position-matching that
-    the mesh makes redundant; simplify `edits`/`topology` to operate on
-    connectivity directly. **M4:** indexed `.igz` serialization.
+  - **Push/pull robustness (done, `68d985b`):** watertight stitch after every
+    edit — resolve T-junctions, collapse redundant collinear vertices, fuse
+    coplanar face regions (seeded + gated on push-created faces). Sub-segment
+    coplanar classification + `refine_loop_with_points` (consume the base
+    instead of leaving an internal partition) + `extend_wall_edge` bailing on
+    T-junctions. Exact snapshot undo (`capture_state`/`restore_state`,
+    `SnapshotMutation`); the live preview applies+reverts the real mutation per
+    frame, so the drag shows the stitched result. Reversible stitch primitives
+    in `core/mesh.py`, `run_stitch` in `core/history.py`. 153 tests.
+  - **Swap merged to `main` (`785dc8c`, 2026-06-08):** `feat/mesh-engine-swap`
+    merged `--no-ff` after thorough user validation (chained multi-direction
+    pushes, undo, clean preview).
+  - **Next — M3 (reassessed: low value):** `topology` only *type-hints*
+    `Edge`/`Face` (swapping to `core.mesh` is trivial), but `edits.py` still
+    builds throwaway position-valued `Edge`/`Face` to *simulate* a batch before
+    its commands run — so `core.geometry` can't be deleted cleanly without
+    relocating those simulation value types (~8 tests construct them too). The
+    swap's benefit is already realized. **M4:** indexed `.igz` serialization
+    (more concrete value; OBJ/glTF/IFC-friendly).

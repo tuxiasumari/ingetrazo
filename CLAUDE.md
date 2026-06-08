@@ -173,11 +173,13 @@ Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir mod
 
 **Estado casita (2026-06-08):** selección de caras, push/pull pasante (vanos) y Move (techo a dos aguas con frontón relleno) **hechos** — la casita es dibujable reconocible end-to-end. Lo que falta para "presentable": **acabados** (materiales por cara + cotas, Fase 7) y **Offset** para muros tipo anillo (Fase 4).
 
-### 🔧 Migración del motor a conectividad de vértices compartidos (en curso, 2026-06-08)
+### 🔧 Migración del motor a conectividad de vértices compartidos (swap en `main`, 2026-06-08)
 
-Decisión arquitectónica de fondo: migrar el motor de topología del modelo actual (`Edge`/`Face` guardan **copias** de puntos; la conectividad se **redescubre por posición** con tolerancia) a **vértices compartidos, no-manifold** — el modelo de SketchUp. Motivo: el modelo viejo es frágil (bug float32), push/pull crecía como árbol de casos, move era O(n). El modelo nuevo (`core/mesh.py`) elimina el matching por posición, hace `move` O(1) por vértice y es el cimiento de Groups. **No es half-edge de manual** (ese asume 2-manifold y rompería con la geometría de arquitectura, p.ej. una arista que comparten 2 muros y un piso); es **shared-vertex + incidencia radial**.
+Decisión arquitectónica de fondo: migrar el motor de topología del modelo viejo (`Edge`/`Face` guardan **copias** de puntos; la conectividad se **redescubre por posición** con tolerancia) a **vértices compartidos, no-manifold** — el modelo de SketchUp. Motivo: el modelo viejo es frágil (bug float32), push/pull crecía como árbol de casos, move era O(n). El modelo nuevo (`core/mesh.py`) elimina el matching por posición, hace `move` O(1) por vértice y es el cimiento de Groups. **No es half-edge de manual** (ese asume 2-manifold y rompería con la geometría de arquitectura, p.ej. una arista que comparten 2 muros y un piso); es **shared-vertex + incidencia radial**.
 
-Estado: M0 (modelo), M1 (compat de lectura), M2 inicio (`split_edge`) en `main`; **el swap — la app ya corre sobre el mesh — está en la rama `feat/mesh-engine-swap`, SIN mergear**. Falta M3 (borrar `geometry.py` + matching `_key`) y M4 (serialización `.igz` indexada). Próximo paso al retomar: si la app validó OK, mergear la rama a `main`.
+**Estado: M0–M2 (swap) + robustez de push/pull MERGEADOS a `main` (`785dc8c`).** La app corre sobre el mesh. El push/pull ahora hace un **stitch watertight** tras cada edición (resolver T-junctions, colapsar vértices colineales redundantes, fusionar regiones coplanares — sin grietas, particiones internas ni costuras fantasma al encadenar pushes), con **undo exacto por snapshot** y **preview en vivo = resultado real**. 153 tests verdes.
+
+Pendiente (no bloquea features): **M3** — turbio/bajo valor, `edits.py` todavía necesita objetos-valor por posición para *simular* el batch antes de ejecutar comandos, así que `geometry.py` no se borra limpio (el beneficio del swap ya está logrado). **M4** — serialización `.igz` indexada por vértices (más valioso; base OBJ/glTF/IFC).
 
 > Plan completo, alcance, riesgos y log de progreso en **`docs/halfedge-migration-plan.md`**. No duplicar acá.
 
