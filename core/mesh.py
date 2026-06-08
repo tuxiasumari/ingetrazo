@@ -301,3 +301,47 @@ class Mesh:
         if self._registry.get(old) is v:
             del self._registry[old]
         self._registry.setdefault(new, v)
+
+    def split_edge(self, edge: Edge, position: QVector3D) -> tuple[Edge, Edge]:
+        """Split ``edge`` at ``position``, inserting a shared vertex, and return
+        the two sub-edges.
+
+        Every incident face gains the new vertex in its loop, between the edge's
+        endpoints — for *any* number of faces (non-manifold). This is the
+        operation that, in the legacy model, needed position-matching plus a
+        special ``split_edge_in_faces`` pass plus the holes patch; here it falls
+        straight out of shared connectivity. The new vertex lands collinearly,
+        so faces stay flat until it is later moved (a gable ridge, a T-junction).
+        """
+        v0, v1 = edge.v0, edge.v1
+        mid = self.vertex(position)
+        if mid is v0 or mid is v1:
+            # position coincides with an endpoint → nothing to split
+            return edge, edge
+        incident = list(edge.faces)
+        self.remove_edge(edge)
+        e0 = self._link_edge(v0, mid)
+        e1 = self._link_edge(mid, v1)
+        for face in incident:
+            self._insert_into_face_loops(face, v0, v1, mid)
+            if face not in e0.faces:
+                e0.faces.append(face)
+            if face not in e1.faces:
+                e1.faces.append(face)
+        return e0, e1
+
+    @staticmethod
+    def _insert_into_face_loops(
+        face: Face, v0: Vertex, v1: Vertex, mid: Vertex
+    ) -> None:
+        """Insert ``mid`` between the consecutive ``v0``/``v1`` pair in the
+        face's outer loop or one of its holes (whichever carries that edge)."""
+        for loop in (face.loop, *face.hole_loops):
+            n = len(loop)
+            for i in range(n):
+                j = (i + 1) % n
+                if (loop[i] is v0 and loop[j] is v1) or (
+                    loop[i] is v1 and loop[j] is v0
+                ):
+                    loop.insert(i + 1, mid)  # i+1 == n wraps to an append
+                    return

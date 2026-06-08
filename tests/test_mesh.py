@@ -193,3 +193,57 @@ def test_mesh_is_read_compatible_with_igz_save(tmp_path):
     assert data["scene"]["faces"][0]["vertices"][0] == [0.0, 0.0, 0.0]
     assert len(data["scene"]["faces"][0]["holes"][0]) == 4
     assert len(data["scene"]["edges"]) >= 1
+
+
+# ---- M2: split_edge (the operation that needed hacks in the legacy model) ----
+
+def test_split_edge_propagates_to_both_faces():
+    # Two faces share the edge (1,0)-(1,1). Splitting it at the midpoint must
+    # insert that vertex into BOTH faces' loops — the gable-propagation case,
+    # which in the legacy model needed split_edge_in_faces + the holes patch.
+    m = Mesh()
+    left = m.add_face([V(0, 0), V(1, 0), V(1, 1), V(0, 1)])
+    right = m.add_face([V(1, 0), V(2, 0), V(2, 1), V(1, 1)])
+    shared = m.find_edge(m.vertex_at(V(1, 0)), m.vertex_at(V(1, 1)))
+
+    e0, e1 = m.split_edge(shared, V(1, 0.5))
+    mid = m.vertex_at(V(1, 0.5))
+
+    assert mid in left.loop and mid in right.loop      # both faces gained it
+    assert len(left.loop) == 5 and len(right.loop) == 5
+    assert shared not in m.edges                        # old edge gone
+    # both sub-edges border both faces
+    assert set(e0.faces) == {left, right}
+    assert set(e1.faces) == {left, right}
+
+
+def test_split_edge_non_manifold_propagates_to_all():
+    # Three faces along one edge — the split lands in all three.
+    m = Mesh()
+    a, b = V(0, 0, 0), V(0, 0, 2)
+    m.add_face([a, b, V(1, 0, 2), V(1, 0, 0)])
+    m.add_face([a, b, V(0, 1, 2), V(0, 1, 0)])
+    m.add_face([a, b, V(-1, 0, 2), V(-1, 0, 0)])
+    e = m.find_edge(m.vertex_at(a), m.vertex_at(b))
+
+    e0, e1 = m.split_edge(e, V(0, 0, 1))
+    mid = m.vertex_at(V(0, 0, 1))
+
+    assert all(len(f.loop) == 5 for f in mid.faces())
+    assert len(mid.faces()) == 3
+    assert len(e0.faces) == 3 and len(e1.faces) == 3
+
+
+def test_split_edge_then_move_forms_a_gable():
+    # Split the shared ridge edge, then raise the midpoint: both slopes deform —
+    # the whole gable mechanic, now two trivial mesh ops.
+    m = Mesh()
+    left = m.add_face([V(0, 0, 2), V(2, 0, 2), V(2, 2, 2), V(0, 2, 2)])
+    # second slope sharing the (2,0,2)-(2,2,2) edge
+    right = m.add_face([V(2, 0, 2), V(4, 0, 2), V(4, 2, 2), V(2, 2, 2)])
+    ridge = m.find_edge(m.vertex_at(V(2, 0, 2)), m.vertex_at(V(2, 2, 2)))
+    m.split_edge(ridge, V(2, 1, 2))
+    apex = m.vertex_at(V(2, 1, 2))
+    m.move_vertex(apex, V(0, 0, 1))  # raise the ridge point
+    assert any(abs(p.z() - 3) < 1e-6 for p in left.vertices)
+    assert any(abs(p.z() - 3) < 1e-6 for p in right.vertices)

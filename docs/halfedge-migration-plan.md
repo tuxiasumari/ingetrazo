@@ -112,5 +112,14 @@ the full refactor, and leaves Level C open without commitment.
   compatible with the legacy consumers. Proven by feeding a `Mesh` straight to
   `formats.igz.save_scene` (the real save path reads `.edges`→`.a/.b` and
   `.faces`→`.vertices/.holes/.triangulate`). App still untouched.
-- **Next — M2:** migrate mutations one at a time behind the `Command` facade,
-  starting with add-edge/add-face/weld, then split, then move, then push/pull.
+- **M2 (started):** mutation operations on the Mesh, built and tested in
+  parallel before the live Scene/Command swap.
+  - `mesh.split_edge(edge, position)` — splits an edge and inserts the shared
+    vertex into *every* incident face loop (any count → non-manifold), in one
+    pass. The legacy model needed position-matching + `split_edge_in_faces` +
+    the holes patch + hit the float32 bug for this; here it falls out of shared
+    connectivity. Tests cover two-face, three-face (non-manifold), and
+    split-then-move (gable) cases.
+  - **Next:** make `Scene` wrap a `Mesh`, then migrate the Commands
+    (Add/Delete Edge/Face, MoveVertices, PruneOrphans) to mutate it — the
+    coordinated swap that flips the live app, gated by the full test suite.
