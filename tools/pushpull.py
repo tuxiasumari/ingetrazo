@@ -45,6 +45,7 @@ from core.topology import (
     _key,
     classify_push_edge,
     extend_wall_edge,
+    loop_inside_face,
     subtract_loop_from_face,
 )
 from tools.base import Tool, ToolContext
@@ -77,6 +78,9 @@ class PushPullTool(Tool):
         self._normal: QVector3D | None = None
         self._cap_positions: list[QVector3D] = []  # original cap vertices
         self._preview_delta = QVector3D(0.0, 0.0, 0.0)  # live translation applied
+        # When a recess push reaches a parallel far face, this holds
+        # ``(far_face, back_loop)`` so the preview shows a clean through-hole.
+        self._through = None
 
     # ---- Lifecycle ----------------------------------------------------------
     def on_activate(self, viewport) -> None:
@@ -110,10 +114,18 @@ class PushPullTool(Tool):
             # both directions (no overlay, no leftover edges).
             self._apply_translate(viewport, self._normal * self.extrusion)
         elif self._attached and abs(self.extrusion) > 1e-6:
-            # Recess (window/door): hide the flat inner face only once it starts
-            # moving, so the pocket shows. Before that it stays visible.
-            viewport.set_suppressed_faces({self.base_face})
+            # Recess (window/door): hide the flat inner face once it starts
+            # moving, so the pocket shows. If the push has reached a parallel far
+            # face, it's a through-hole — hide that face too so you see through.
+            self._through = self._find_through_face(
+                self.base_face, self.extrusion, viewport.scene.faces
+            )
+            if self._through is not None:
+                viewport.set_suppressed_faces({self.base_face, self._through[0]})
+            else:
+                viewport.set_suppressed_faces({self.base_face})
         else:
+            self._through = None
             viewport.set_suppressed_faces(set())
         viewport.update()
 
@@ -194,11 +206,20 @@ class PushPullTool(Tool):
             or abs(self.extrusion) < 1e-6
         ):
             return []
+        base = self.base_face.vertices
+        count = len(base)
+        if self._through is not None:
+            # Through-hole: only the tunnel walls, clamped to the far face, and
+            # no cap — so the opening reads as see-through.
+            _, back_loop = self._through
+            return [
+                Face([base[i], base[j], back_loop[j], back_loop[i]])
+                for i in range(count)
+                for j in ((i + 1) % count,)
+            ]
         n = self.base_face.normal()
         d = self.extrusion
-        base = self.base_face.vertices
         top = [v + n * d for v in base]
-        count = len(base)
         faces = [Face(list(top))]
         for i in range(count):
             j = (i + 1) % count
@@ -299,6 +320,17 @@ class PushPullTool(Tool):
         ]
         attached = all(kind != "free" for kind, _ in kinds)
 
+        # Through-hole: pushing an embedded face (a window/door in a wall) far
+        # enough to reach a parallel face on the far side of the solid punches
+        # clean through — the opening appears on both faces, joined by tunnel
+        # walls, instead of a blind recess.
+        through = self._find_through_face(face, d, faces) if attached else None
+        if through is not None:
+            self._commit_through_hole(viewport, face, base, through)
+            self._reset()
+            viewport.update()
+            return
+
         commands: list = []
         if attached:
             commands.append(DeleteFaceCommand(face))
@@ -359,6 +391,56 @@ class PushPullTool(Tool):
         self._reset()
         viewport.update()
 
+    # ---- Through-hole -------------------------------------------------------
+    def _find_through_face(self, face, d: float, faces):
+        """If pushing ``face`` by ``d`` along its normal reaches a face parallel
+        to it on the far side of the solid (the opposite wall), return
+        ``(far_face, back_loop)`` — the face to punch and the opening projected
+        onto it. Otherwise ``None`` (a blind recess)."""
+        fn = face.normal().normalized()
+        push = fn if d > 0 else -fn
+        origin = face.centroid()
+        best = None
+        for g in faces:
+            if g is face:
+                continue
+            if abs(QVector3D.dotProduct(fn, g.normal().normalized())) < 0.999:
+                continue  # not parallel
+            dist = QVector3D.dotProduct(g.centroid() - origin, push)
+            if dist <= 1e-4 or dist > abs(d) + 1e-4:
+                continue  # coplanar / behind / farther than the push reaches
+            back_loop = [v + push * dist for v in face.vertices]
+            if loop_inside_face(g, back_loop):
+                if best is None or dist < best[0]:
+                    best = (dist, g, back_loop)
+        if best is None:
+            return None
+        return best[1], best[2]
+
+    def _commit_through_hole(self, viewport, face, base, through) -> None:
+        far_face, back_loop = through
+        count = len(base)
+        commands: list = [
+            DeleteFaceCommand(face),       # remove the pushed cap (window pane)
+            DeleteFaceCommand(far_face),   # re-add the far face with a new hole
+            AddFaceCommand(
+                list(far_face.vertices), auto=False,
+                holes=[list(h) for h in far_face.holes] + [list(back_loop)],
+            ),
+        ]
+        for i in range(count):             # back opening boundary
+            commands.append(AddEdgeCommand(back_loop[i], back_loop[(i + 1) % count]))
+        for i in range(count):             # tunnel verticals
+            commands.append(AddEdgeCommand(base[i], back_loop[i]))
+        for i in range(count):             # tunnel walls
+            j = (i + 1) % count
+            commands.append(AddFaceCommand(
+                [base[i], base[j], back_loop[j], back_loop[i]], auto=False))
+        # The front opening's edges now border the front hole + the tunnel; sweep
+        # only anything genuinely left dangling.
+        commands.append(PruneOrphanEdgesCommand(list(base)))
+        viewport.history.execute(CompoundCommand(commands))
+
     def _reset(self) -> None:
         self.hovered_face = None
         self.base_face = None
@@ -370,3 +452,4 @@ class PushPullTool(Tool):
         self._normal = None
         self._cap_positions = []
         self._preview_delta = QVector3D(0.0, 0.0, 0.0)
+        self._through = None

@@ -459,3 +459,54 @@ def test_stacked_block_side_pushes_stay_clean():
     orphans = [e for e in scene.edges
                if frozenset((_key(e.a), _key(e.b))) not in face_edges]
     assert orphans == []
+
+
+def test_push_through_wall_makes_a_real_hole():
+    # A wall (thin box), a window on its front face, pushed past the thickness:
+    # the opening punches clean through — the back face gains the same hole and
+    # tunnel walls join the two, with no blind floor left inside.
+    from core.edits import build_add_edges
+
+    scene = Scene()
+    hist = History(scene)
+    # Wall footprint x0..4, y0..0.3 (thickness), extruded up to z=3.
+    floor = [V(0, 0, 0), V(4, 0, 0), V(4, 0.3, 0), V(0, 0.3, 0)]
+    hist.execute(build_add_edges(
+        scene, [(floor[i], floor[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(floor))]))
+    _push(scene, scene.faces[0], 3.0)
+
+    # Window on the front face (y=0).
+    window = [V(1, 0, 1), V(3, 0, 1), V(3, 0, 2), V(1, 0, 2)]
+    hist.execute(build_add_edges(
+        scene, [(window[i], window[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(window), auto=True)]))
+    winface = next(
+        f for f in scene.faces if len(f.vertices) == 4
+        and all(abs(v.y()) < 1e-9 for v in f.vertices)
+        and max(v.x() for v in f.vertices) <= 3.001
+        and min(v.x() for v in f.vertices) >= 0.999
+    )
+
+    # Push inward past the 0.3 wall (the normal points out, so inward is -).
+    _push_real(scene, winface, -0.4)
+
+    def big_face_at_y(y):
+        # 0.3 isn't exact in QVector3D's float32 storage, so use a loose tol.
+        return [
+            f for f in scene.faces if len(f.vertices) == 4
+            and all(abs(v.y() - y) < 1e-4 for v in f.vertices)
+            and {round(v.z()) for v in f.vertices} == {0, 3}
+        ]
+
+    front = big_face_at_y(0.0)
+    back = big_face_at_y(0.3)
+    assert len(front) == 1 and len(front[0].holes) == 1   # mouth on the front
+    assert len(back) == 1 and len(back[0].holes) == 1     # punched clean through
+    # No blind floor cap left inside the wall thickness.
+    assert [f for f in scene.faces if all(0.01 < v.y() < 0.29 for v in f.vertices)] == []
+    # The window pane itself is consumed.
+    assert [
+        f for f in scene.faces if all(abs(v.y()) < 1e-9 for v in f.vertices)
+        and {round(v.z()) for v in f.vertices} == {1, 2}
+    ] == []
