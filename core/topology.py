@@ -1117,6 +1117,27 @@ def _collinear_overlapping(e1, e2) -> bool:
     return min(hi1, d2.length()) - max(lo1, 0.0) > 1e-4
 
 
+def resolve_tjunctions(mesh, max_iter: int = 1000) -> None:
+    """Split edges at T-junction vertices so faces with mismatched subdivisions
+    share connectivity instead of a naked collinear seam.
+
+    Two walls meeting can leave one face's long edge running past the vertices
+    where the other face is split (the door, a perpendicular wall). Their shared
+    boundary is then two separate naked edges, not one border-2 edge — so erasing
+    the dividing line cascades and deletes a wall instead of merging. Splitting at
+    each interior vertex welds the seam; erase-merge then reunites the walls."""
+    for _ in range(max_iter):
+        target = None
+        for e in mesh.edges:
+            v = mesh.interior_vertex_on(e)
+            if v is not None:
+                target = (e, v)
+                break
+        if target is None:
+            return
+        mesh.split_edge_at(*target)
+
+
 def prune_collinear_orphan_edges(mesh) -> list:
     """Remove edges that bound no face and lie collinearly over another edge — the
     unwelded collinear overlaps that leave a duplicate 'division line'. Returns
@@ -1178,7 +1199,11 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
     #     leaves a "doubled line" you can't merge away).
     prune_collinear_orphan_edges(mesh)
 
-    # 0b. Flip any reversed face so coplanar faces face the same way.
+    # 0b. Weld T-junction seams so two faces share their dividing edge — erasing
+    #     it then merges the walls instead of deleting one.
+    resolve_tjunctions(mesh)
+
+    # 0c. Flip any reversed face so coplanar faces face the same way.
     orient_coplanar_faces(mesh)
 
     # 1. Dedupe nested holes by rebuilding the face with the outermost holes.
