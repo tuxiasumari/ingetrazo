@@ -164,14 +164,22 @@ Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir mod
 |---|---|---|
 | 0. Huella + caja (rectángulo, extruir) | Rectangle + Push/Pull | ✅ |
 | 1. Muros con espesor (vaciar / anillo) | **Offset (F)** (Fase 4) | ❌ |
-| 2. Vanos: puerta + ventana (push **atravesando**) | **Push/pull pasante (through-hole)** | ❌ gap conocido |
-| 3. Techo a dos aguas (subir el caballete) | **Move (M)** + topología que aguante mover (Fase 3) | ❌ |
+| 2. Vanos: puerta + ventana (push **atravesando**) | **Push/pull pasante (through-hole)** | ✅ (sesión 2026-06-08) |
+| 3. Techo a dos aguas (subir el caballete) | **Move (M)** + topología que aguante mover | ✅ (frontón se rellena, gable) |
 | 4. Tabiques + escalera | Subdivisión + grada solid-aware | ✅ (sesión 2026-06-06) |
 | 5. Acabados (color por cara, cotas) | Materials + Dimensions (Fase 7) | ❌ |
 
 **Reorden que revela la casita:** los bloqueos reales para *producir* una casita son **push/pull pasante** (puerta/ventana) y **Move** (techo) — que el roadmap abstracto tenía más abajo que "Fase 2 Selección". Selección *habilita el flujo* (agarrar caras cómodo) pero pasante + Move *producen la casita*.
 
-**Orden sugerido próxima sesión:** (1) Selección de caras mínima (Fase 2, el habilitador) → (2) push/pull pasante (desbloquea vanos, cierra gap) → (3) Move (desbloquea techo) → recién ahí Offset y acabados. La casita reconocible end-to-end = el hito de integración.
+**Estado casita (2026-06-08):** selección de caras, push/pull pasante (vanos) y Move (techo a dos aguas con frontón relleno) **hechos** — la casita es dibujable reconocible end-to-end. Lo que falta para "presentable": **acabados** (materiales por cara + cotas, Fase 7) y **Offset** para muros tipo anillo (Fase 4).
+
+### 🔧 Migración del motor a conectividad de vértices compartidos (en curso, 2026-06-08)
+
+Decisión arquitectónica de fondo: migrar el motor de topología del modelo actual (`Edge`/`Face` guardan **copias** de puntos; la conectividad se **redescubre por posición** con tolerancia) a **vértices compartidos, no-manifold** — el modelo de SketchUp. Motivo: el modelo viejo es frágil (bug float32), push/pull crecía como árbol de casos, move era O(n). El modelo nuevo (`core/mesh.py`) elimina el matching por posición, hace `move` O(1) por vértice y es el cimiento de Groups. **No es half-edge de manual** (ese asume 2-manifold y rompería con la geometría de arquitectura, p.ej. una arista que comparten 2 muros y un piso); es **shared-vertex + incidencia radial**.
+
+Estado: M0 (modelo), M1 (compat de lectura), M2 inicio (`split_edge`) en `main`; **el swap — la app ya corre sobre el mesh — está en la rama `feat/mesh-engine-swap`, SIN mergear**. Falta M3 (borrar `geometry.py` + matching `_key`) y M4 (serialización `.igz` indexada). Próximo paso al retomar: si la app validó OK, mergear la rama a `main`.
+
+> Plan completo, alcance, riesgos y log de progreso en **`docs/halfedge-migration-plan.md`**. No duplicar acá.
 
 ### 🔮 Roadmap v0.1 (versión inicial usable real)
 Orden sugerido alineado con la visión (freeform + BIM tagging + 2D que emerge del 3D):
@@ -240,8 +248,9 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 ├── README.md / CONTRIBUTING.md / CODE_OF_CONDUCT.md
 ├── core/
 │   ├── camera.py              ← OrbitCamera (Z-up, lookAt, perspective/ortho, fit_to, set_view)
-│   ├── geometry.py            ← Edge (eq=False) + Face (Newell normal + centroid + holes + triangulate)
-│   ├── scene.py               ← Scene (edges, faces, selection, version, bounds)
+│   ├── mesh.py                ← MOTOR NUEVO: Vertex compartido + Edge (incidencia radial) + Face + Mesh (no-manifold). Reemplazando a geometry.py y parte de topology.py — ver docs/halfedge-migration-plan.md
+│   ├── geometry.py            ← motor VIEJO (Edge/Face por copia). En vías de retiro (M3); hoy solo para objetos throwaway de simulación en edits/topology
+│   ├── scene.py               ← Scene (envuelve un Mesh; edges/faces son vistas de solo-lectura sobre él)
 │   ├── snap.py                ← compute_snap(...) — 7 tipos de snap con resolver callbacks
 │   ├── topology.py            ← grafo/geometría: ciclos, intersección, contención, chord/chain split, clasificación de aristas
 │   ├── triangulate.py         ← port de earcut (huecos) + fan convexo; plane_axes, is_convex
