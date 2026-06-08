@@ -573,6 +573,59 @@ def find_chord_split(
     return None
 
 
+def _loop_with_point(
+    loop: list[QVector3D], ka: tuple, kb: tuple, point: QVector3D
+) -> Optional[list[QVector3D]]:
+    """Copy of ``loop`` with ``point`` inserted between the first consecutive
+    vertex pair whose keys are ``ka``/``kb`` (either order). ``None`` if no such
+    boundary edge exists or ``point`` already is one of those vertices."""
+    kp = _key(point)
+    n = len(loop)
+    for i in range(n):
+        j = (i + 1) % n
+        ki, kj = _key(loop[i]), _key(loop[j])
+        if {ki, kj} == {ka, kb}:
+            if kp in (ki, kj):
+                return None
+            new = list(loop)
+            new.insert(i + 1, QVector3D(point))
+            return new
+    return None
+
+
+def split_edge_in_faces(
+    faces: Iterable[Face],
+    edge_a: QVector3D,
+    edge_b: QVector3D,
+    point: QVector3D,
+    skip_endpoints: Iterable[QVector3D] = (),
+) -> list[tuple[Face, list[QVector3D]]]:
+    """Propagate an edge split into the faces that share that edge.
+
+    When a drawn segment cuts an existing edge ``edge_a``–``edge_b`` at
+    ``point``, every face carrying that edge on its outer boundary should gain
+    ``point`` as a (collinear) vertex — otherwise the face stays detached from
+    the split and won't follow when that vertex is later moved. This is what
+    lets a gable wall pick up the ridge apex and deform into a pentagon when the
+    ridge is raised, instead of leaving an open triangular gap.
+
+    Returns ``[(face, new_vertices), ...]`` for the faces that changed. A face
+    carrying *all* of ``skip_endpoints`` on its boundary is left out: that face
+    is chord-split by the drawn segment, which already inserts the point, so
+    handling it here would double-process it. Holes are left untouched.
+    """
+    ka, kb = _key(edge_a), _key(edge_b)
+    skip = list(skip_endpoints)
+    out: list[tuple[Face, list[QVector3D]]] = []
+    for f in faces:
+        if skip and all(_locate_on_loop(f.vertices, p) is not None for p in skip):
+            continue
+        new_verts = _loop_with_point(f.vertices, ka, kb, point)
+        if new_verts is not None:
+            out.append((f, new_verts))
+    return out
+
+
 # ---- Loop subtraction (a face drawn against another's boundary) -------------
 
 def _face_plane_proj(face: Face):

@@ -73,3 +73,32 @@ def test_ridge_move_deforms_roof_slopes():
     for half in halves:
         assert any(abs(v.z() - 3) < 1e-9 for v in half.vertices)
         assert any(abs(v.z() - 2) < 1e-9 for v in half.vertices)  # eaves stay down
+
+
+def test_ridge_apex_propagates_into_gable_wall():
+    # A top face and a perpendicular gable wall share an edge. Drawing the ridge
+    # cuts that shared edge at its midpoint; the apex vertex must be inserted
+    # into the wall's loop too, so raising the ridge deforms the wall into a
+    # filled gable pentagon instead of leaving a triangular gap.
+    scene = Scene()
+    hist = History(scene)
+    # Top face at z=2 (the roof base).
+    top = [V(0, 0, 2), V(4, 0, 2), V(4, 2, 2), V(0, 2, 2)]
+    # Front gable wall on the y=0 plane, sharing the edge (0,0,2)-(4,0,2).
+    wall = [V(0, 0, 0), V(4, 0, 0), V(4, 0, 2), V(0, 0, 2)]
+    scene.faces.extend([Face(list(top)), Face(list(wall))])
+    # Edges that exist in the graph (the two top edges the ridge will cut).
+    for seg in [(V(0, 0, 2), V(4, 0, 2)), (V(0, 2, 2), V(4, 2, 2))]:
+        hist.execute(build_add_edges(scene, [seg], detect_faces=False))
+
+    # Ridge from the midpoint of the front top edge to the back top edge.
+    hist.execute(build_add_edges(scene, [(V(2, 0, 2), V(2, 2, 2))], detect_faces=True))
+
+    wall_face = next(f for f in scene.faces if all(abs(v.y()) < 1e-9 for v in f.vertices))
+    apex_in_wall = [v for v in wall_face.vertices if abs(v.x() - 2) < 1e-9 and abs(v.y()) < 1e-9]
+    assert apex_in_wall, "ridge apex was not inserted into the gable wall loop"
+    assert len(wall_face.vertices) == 5  # rectangle became a pentagon
+
+    # Raising the ridge lifts the wall's apex → gable fills, no gap.
+    hist.execute(MoveVerticesCommand([V(2, 0, 2), V(2, 2, 2)], V(0, 0, 1)))
+    assert any(abs(v.z() - 3) < 1e-9 for v in wall_face.vertices)

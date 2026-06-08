@@ -38,6 +38,7 @@ from core.topology import (
     find_duplicate_edge,
     is_planar,
     plan_edge_split,
+    split_edge_in_faces,
 )
 
 Segment = tuple[QVector3D, QVector3D]
@@ -73,6 +74,25 @@ def plan_edge_commands(
                 if find_duplicate_edge(simulated, sa, sb) is None:
                     commands.append(AddEdgeCommand(sa, sb))
                     simulated.append(Edge(sa, sb))
+
+            # Carry the split into faces sharing this edge — but not the face
+            # the drawn segment chord-splits, which inserts the point itself.
+            # This is what makes a gable wall gain the ridge apex (and fill its
+            # triangular gap) when the ridge is later moved up. Gated on
+            # ``detect_faces``: tools that manage their own faces (Rectangle, and
+            # push/pull's prep edges) opt out of auto-topology, so they keep
+            # their simple rectangular walls for the push machinery.
+            if detect_faces:
+                for f, new_verts in split_edge_in_faces(
+                    faces_snapshot, edge.a, edge.b, point, skip_endpoints=(a, b)
+                ):
+                    commands.append(DeleteFaceCommand(f))
+                    commands.append(
+                        AddFaceCommand(new_verts, auto=False, holes=f.holes or None)
+                    )
+                    faces_snapshot[faces_snapshot.index(f)] = Face(
+                        list(new_verts), [list(h) for h in f.holes]
+                    )
 
         # Add the new segment's pieces (welding duplicates), auto-facing.
         for sa, sb in new_segments:
