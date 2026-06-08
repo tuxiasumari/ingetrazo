@@ -176,6 +176,8 @@ class Viewport(QOpenGLWidget):
         "on_edge": "On Edge",
         "on_face": "On Face",
         "origin": "Origin",
+        "extension": "Extension",
+        "intersection": "Intersection",
     }
 
     def __init__(self, parent=None) -> None:
@@ -836,10 +838,19 @@ class Viewport(QOpenGLWidget):
             return
         r, g, b = snap.color
         color = QColor.fromRgbF(r, g, b, 1.0)
+        # Dashed guide line (the extension inference shows the edge's dashed
+        # continuation to the cursor).
+        if snap.guide is not None:
+            gp0 = self._world_to_pixel(snap.guide[0])
+            gp1 = self._world_to_pixel(snap.guide[1])
+            if gp0 is not None and gp1 is not None:
+                dash = QPen(QColor.fromRgbF(r, g, b, 0.9), 1.0, Qt.DashLine)
+                painter.setPen(dash)
+                painter.drawLine(QPointF(*gp0), QPointF(*gp1))
         painter.setPen(QPen(color, 2.0))
         painter.setBrush(QColor.fromRgbF(r, g, b, 0.25))
         px, py = pixel
-        if snap.kind in ("endpoint", "origin", "on_edge"):
+        if snap.kind in ("endpoint", "origin", "on_edge", "extension", "intersection"):
             painter.drawRect(QRectF(px - 5, py - 5, 10, 10))
         elif snap.kind == "midpoint":
             # Cyan diamond, SketchUp-style.
