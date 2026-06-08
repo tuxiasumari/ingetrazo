@@ -247,13 +247,17 @@ class PushPullTool(Tool):
             return
 
         normal = face.normal()
+        allverts = [v.position for v in scene.mesh.vertices]
         # Split the base loop at any existing vertex sitting on one of its edges
         # (a T-junction where the host wall ends and an earlier overhang's floor
         # begins) so each sub-edge is carried by one face and classifies right.
-        base = refine_loop_with_points(
-            face.vertices, [v.position for v in scene.mesh.vertices]
-        )
+        base = refine_loop_with_points(face.vertices, allverts)
         top = [v + normal * d for v in base]
+        # A face with holes (an offset ring — the wall footprint) extrudes its
+        # holes too: the inner walls rise and the cap keeps the opening, so a
+        # ring lifts as walls-with-thickness, not the whole footprint.
+        base_holes = [refine_loop_with_points(h, allverts) for h in face.holes]
+        top_holes = [[v + normal * d for v in h] for h in base_holes]
         count = len(base)
         faces = scene.faces
         kinds = [
@@ -267,15 +271,22 @@ class PushPullTool(Tool):
         if through is not None:
             commands = self._through_commands(face, base, through)
         else:
-            commands = self._extrude_commands(face, base, top, count, kinds, attached)
+            commands = self._extrude_commands(
+                face, base, top, base_holes, top_holes, count, kinds, attached
+            )
         for cmd in commands:
             cmd.do(scene)
         new_faces = set(scene.mesh.faces) - before
-        run_stitch(scene.mesh, {_key(p) for p in (list(base) + list(top))}, new_faces)
+        seed = list(base) + list(top)
+        for hb, ht in zip(base_holes, top_holes):
+            seed += list(hb) + list(ht)
+        run_stitch(scene.mesh, {_key(p) for p in seed}, new_faces)
 
-    def _extrude_commands(self, face, base, top, count, kinds, attached) -> list:
+    def _extrude_commands(self, face, base, top, base_holes, top_holes,
+                          count, kinds, attached) -> list:
         """Build the commands that extrude ``face`` to ``top``: a consumed/kept
-        base, the moved cap, and a wall (or notch / wall-extension) per side."""
+        base, the moved cap (carrying any holes), a wall per side, and an inner
+        wall per hole edge."""
         commands: list = []
         if attached:
             commands.append(DeleteFaceCommand(face))  # base consumed into the solid
@@ -283,7 +294,20 @@ class PushPullTool(Tool):
             commands.append(AddEdgeCommand(top[i], top[(i + 1) % count]))
         for i in range(count):
             commands.append(AddEdgeCommand(base[i], top[i]))
-        commands.append(AddFaceCommand(list(top), auto=not attached))
+        commands.append(AddFaceCommand(
+            list(top), auto=not attached,
+            holes=[list(th) for th in top_holes] or None))
+
+        # Inner walls: each hole edge raises a wall to the moved cap's opening.
+        for hb, ht in zip(base_holes, top_holes):
+            hn = len(hb)
+            for i in range(hn):
+                commands.append(AddEdgeCommand(ht[i], ht[(i + 1) % hn]))
+            for i in range(hn):
+                commands.append(AddEdgeCommand(hb[i], ht[i]))
+            for i in range(hn):
+                j = (i + 1) % hn
+                commands.append(AddFaceCommand([hb[i], hb[j], ht[j], ht[i]], auto=False))
 
         for i in range(count):
             j = (i + 1) % count

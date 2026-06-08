@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from formats import igz as igz_format
 from tools.line import LineTool
 from tools.move import MoveTool
+from tools.offset import OffsetTool
 from tools.pushpull import PushPullTool
 from tools.rectangle import RectangleTool
 from tools.select import SelectTool
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
             "line": LineTool(),
             "rectangle": RectangleTool(),
             "pushpull": PushPullTool(),
+            "offset": OffsetTool(),
             "move": MoveTool(),
         }
         self._tool_actions: dict[str, QAction] = {}

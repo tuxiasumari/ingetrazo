@@ -908,3 +908,66 @@ def find_cycles_through(
             if second is not None and not _same_cycle(second, first):
                 cycles.append(second)
     return cycles
+
+
+# ---- Polygon offset (Offset tool: walls with thickness) --------------------
+
+def _offset_line_intersection(
+    p0: QVector3D, u: QVector3D, p1: QVector3D, v: QVector3D, n: QVector3D
+) -> Optional[QVector3D]:
+    """Intersection of two coplanar lines ``p0+s·u`` and ``p1+t·v`` (in the plane
+    with normal ``n``). For (near-)parallel lines — collinear consecutive edges —
+    return ``p1`` so the shared vertex survives without a spurious corner."""
+    denom = QVector3D.dotProduct(QVector3D.crossProduct(u, v), n)
+    if abs(denom) < 1e-9:
+        return QVector3D(p1)
+    s = QVector3D.dotProduct(QVector3D.crossProduct(p1 - p0, v), n) / denom
+    return p0 + u * s
+
+
+def offset_loop(
+    loop: list[QVector3D], normal: QVector3D, d: float
+) -> Optional[list[QVector3D]]:
+    """Offset a planar polygon ``loop`` by ``d`` in its plane: ``d > 0`` moves the
+    boundary *inward* (toward the interior), ``d < 0`` outward. Each edge slides
+    along its in-plane normal and consecutive offset edges are re-intersected for
+    the new corners. ``None`` if the loop degenerates (too few points, a zero-
+    length edge, or the offset collapses/inverts it — e.g. inward by more than
+    the polygon's half-width).
+
+    Inward is ``cross(n, edge_dir)``: the Newell ``normal`` winds the loop CCW
+    around itself, so that points to the interior. Convex and mild concave loops
+    work; a deep concavity can self-intersect (not handled — returns None on
+    inversion). Enough for rectangular footprints (walls with thickness)."""
+    count = len(loop)
+    if count < 3:
+        return None
+    n = normal.normalized()
+    offset_lines: list[tuple[QVector3D, QVector3D]] = []
+    for i in range(count):
+        a = loop[i]
+        b = loop[(i + 1) % count]
+        edge = b - a
+        if edge.length() < _SPLIT_TOLERANCE:
+            return None
+        e = edge.normalized()
+        inward = QVector3D.crossProduct(n, e).normalized()
+        offset_lines.append((a + inward * d, e))
+    new_loop: list[QVector3D] = []
+    for i in range(count):
+        p0, u = offset_lines[(i - 1) % count]
+        p1, v = offset_lines[i]
+        pt = _offset_line_intersection(p0, u, p1, v, n)
+        if pt is None:
+            return None
+        new_loop.append(pt)
+    # Reject an overshot inward offset: if any edge reversed direction, the
+    # offset edges crossed (the wall is thicker than the polygon's half-width).
+    for i in range(count):
+        orig = loop[(i + 1) % count] - loop[i]
+        new = new_loop[(i + 1) % count] - new_loop[i]
+        if new.length() < _SPLIT_TOLERANCE:
+            return None
+        if QVector3D.dotProduct(orig.normalized(), new.normalized()) <= 0.0:
+            return None
+    return new_loop
