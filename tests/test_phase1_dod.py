@@ -48,6 +48,12 @@ class _StubViewport:
     def update(self):
         pass
 
+    def set_hover(self, entity):
+        pass
+
+    def set_suppressed_faces(self, faces):
+        pass
+
 
 def test_dod_diagonal_makes_two_triangles():
     scene = Scene()

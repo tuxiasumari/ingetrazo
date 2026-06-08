@@ -402,13 +402,19 @@ def _point_on_seg_incl(pt: QVector3D, p: QVector3D, q: QVector3D,
 
 def _segment_on_face_boundary(a: QVector3D, b: QVector3D, face: Face) -> bool:
     """Whether segment ``a``–``b`` lies on a boundary edge of ``face`` (a
-    possibly-shorter sub-segment of one of its edges)."""
-    n = len(face.vertices)
-    for i in range(n):
-        p = face.vertices[i]
-        q = face.vertices[(i + 1) % n]
-        if _point_on_seg_incl(a, p, q) and _point_on_seg_incl(b, p, q):
-            return True
+    possibly-shorter sub-segment of one of its edges).
+
+    Checks the outer loop *and* every hole: a face stacked on another sits with
+    its base edges on the host's *hole* boundary (the opening the stack punched),
+    so a perpendicular neighbour must be found there too — otherwise pushing the
+    stack's side wall is misread as a free extrusion."""
+    for loop in (face.vertices, *face.holes):
+        n = len(loop)
+        for i in range(n):
+            p = loop[i]
+            q = loop[(i + 1) % n]
+            if _point_on_seg_incl(a, p, q) and _point_on_seg_incl(b, p, q):
+                return True
     return False
 
 

@@ -261,6 +261,11 @@ class Viewport(QOpenGLWidget):
         self._preview_faces_vao = None
         self._preview_faces_vbo = None
 
+        # Faces hidden from the normal pass while a tool previews — Push/Pull
+        # hides the flat inner face it's pushing in (a window/door) so the recess
+        # forming behind it is visible instead of covered. Keyed by identity.
+        self._suppressed_faces: set = set()
+
         # Offscreen FBO with depth attachment. QOpenGLWidget's default target
         # on some Mesa/Wayland stacks has no depth buffer, which silently
         # breaks hidden-line removal. Rendering into our own FBO and blitting
@@ -463,11 +468,20 @@ class Viewport(QOpenGLWidget):
             self._gl.glDrawArrays(GL_LINES, 0, 2)
             self._hover_edges_vao.release()
 
-        # Rubber band preview — always on top. Depth test off so it doesn't
-        # z-fight with coincident axes.
-        self._gl.glDisable(GL_DEPTH_TEST)
+        # Rubber band preview. Loose drawing tools float it on top (depth test
+        # off, so it never z-fights with coincident axes). Push/Pull's solid
+        # preview keeps depth testing on, so the forming box's back edges are
+        # hidden behind its faces — SketchUp-style hidden-line removal.
+        depth_wire = (
+            getattr(self.active_tool, "wireframe_depth_tested", False)
+            if self.active_tool is not None
+            else False
+        )
+        if not depth_wire:
+            self._gl.glDisable(GL_DEPTH_TEST)
         self._draw_rubber_band()
-        self._gl.glEnable(GL_DEPTH_TEST)
+        if not depth_wire:
+            self._gl.glEnable(GL_DEPTH_TEST)
 
         self._program.release()
 
@@ -609,7 +623,10 @@ class Viewport(QOpenGLWidget):
         # Faces: triangulate each face (fan when simple, hole-aware when the
         # face has been divided) and concatenate into a single VBO.
         face_data = array("f")
+        suppressed_faces = self._suppressed_faces
         for face in self.scene.faces:
+            if face in suppressed_faces:
+                continue
             for t0, t1, t2 in face.triangulate():
                 face_data.extend([
                     t0.x(), t0.y(), t0.z(),
@@ -665,6 +682,17 @@ class Viewport(QOpenGLWidget):
         self._hover_entity = entity
         self.update()
 
+    def set_suppressed_faces(self, faces) -> None:
+        """Hide a set of scene faces from the normal pass (e.g. the flat inner
+        face a Push/Pull is recessing). Identity-keyed; empty set restores.
+        No-op when unchanged so the drag doesn't rebuild every frame."""
+        faces = set(faces)
+        if faces == self._suppressed_faces:
+            return
+        self._suppressed_faces = faces
+        self._edges_version = -1  # the faces VBO is rebuilt by _sync_edges
+        self.update()
+
     def _draw_preview_faces(self) -> None:
         """Triangulate and draw the active tool's solid preview faces (if any)
         in the same warm cream as real faces, so an extrusion looks solid as it
@@ -708,8 +736,14 @@ class Viewport(QOpenGLWidget):
         if not segments:
             return
 
+        # A tool can force its preview-line colour (Push/Pull uses the normal
+        # edge colour so its forming box reads like real geometry, not a loose
+        # orange rubber band).
+        forced = getattr(tool, "wireframe_color", None)
         snap = self.last_snap
-        if snap is not None and snap.kind == "axis":
+        if forced is not None:
+            color = forced
+        elif snap is not None and snap.kind == "axis":
             r, g, b = snap.color
             color = (r, g, b, 1.0)
         elif snap is not None and snap.kind == "axis_inference":

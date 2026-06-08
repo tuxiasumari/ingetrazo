@@ -44,6 +44,15 @@ class Tool(ABC):
     # viewport defers the click to release: a tiny drag is a click (on_click),
     # a real drag is a box (on_box_select).
     box_select: bool = False
+    # RGBA the viewport uses for this tool's preview lines, overriding the
+    # snap-based rubber-band colour. ``None`` keeps the default behaviour;
+    # Push/Pull sets the normal edge colour so its box reads as real geometry.
+    wireframe_color: tuple[float, float, float, float] | None = None
+    # When True the preview lines are depth-tested (hidden-line removal) instead
+    # of floating on top. Push/Pull uses this so its forming box hides its own
+    # back edges behind its faces, like real geometry; loose drawing tools keep
+    # the default (preview always visible on top).
+    wireframe_depth_tested: bool = False
 
     @abstractmethod
     def on_activate(self, viewport) -> None:

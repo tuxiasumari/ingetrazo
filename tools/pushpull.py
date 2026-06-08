@@ -37,9 +37,12 @@ from core.history import (
     AddFaceCommand,
     CompoundCommand,
     DeleteFaceCommand,
+    MoveVerticesCommand,
     PruneOrphanEdgesCommand,
+    translate_points,
 )
 from core.topology import (
+    _key,
     classify_push_edge,
     extend_wall_edge,
     subtract_loop_from_face,
@@ -51,18 +54,37 @@ class PushPullTool(Tool):
     name = "Push / Pull"
     shortcut = "U"
     uses_snap = False  # picks a face to extrude; no snap markers
+    # Preview lines in the normal edge colour, not the loose orange rubber band,
+    # and depth-tested so the forming box hides its own back edges.
+    wireframe_color = (0.13, 0.17, 0.23, 1.0)
+    wireframe_depth_tested = True
 
     def __init__(self) -> None:
         self.hovered_face: Face | None = None
         self.base_face: Face | None = None
         self.extrusion: float = 0.0  # signed distance along normal
         self.dragging: bool = False
+        # Whether the base face is embedded in a solid (its boundary edges are
+        # shared), so an inner face pushed in is a recess (window/door pocket).
+        self._attached: bool = False
+        # A prism cap (every edge backs onto a perpendicular wall) previews by
+        # live-deforming the real geometry — translating the cap along its
+        # normal, walls following — which is clean in *both* directions. Other
+        # pushes (free face, recess) keep the shaded overlay preview.
+        self._prism_cap: bool = False
+        self._anchor: QVector3D | None = None  # fixed centroid for measuring extrusion
+        self._normal: QVector3D | None = None
+        self._cap_positions: list[QVector3D] = []  # original cap vertices
+        self._preview_delta = QVector3D(0.0, 0.0, 0.0)  # live translation applied
 
     # ---- Lifecycle ----------------------------------------------------------
     def on_activate(self, viewport) -> None:
         self._reset()
 
     def on_deactivate(self, viewport) -> None:
+        self._revert_translate(viewport)
+        viewport.set_hover(None)
+        viewport.set_suppressed_faces(set())
         self._reset()
 
     # ---- Spatial input ------------------------------------------------------
@@ -70,17 +92,28 @@ class PushPullTool(Tool):
         viewport = ctx.viewport
         if not self.dragging:
             self.hovered_face = viewport.pick_face(ctx.screen.x(), ctx.screen.y())
-            viewport.update()
+            # Shade the face that would be pushed, SketchUp-style, so the target
+            # is unmistakable before clicking.
+            viewport.set_hover(self.hovered_face)
             return
 
-        if self.base_face is None:
+        if self.base_face is None or self._anchor is None:
             return
-        anchor = self.base_face.centroid()
-        normal = self.base_face.normal()
         projected = viewport._project_to_lock_line(
-            anchor, normal, ctx.screen.x(), ctx.screen.y()
+            self._anchor, self._normal, ctx.screen.x(), ctx.screen.y()
         )
-        self.extrusion = QVector3D.dotProduct(projected - anchor, normal)
+        self.extrusion = QVector3D.dotProduct(projected - self._anchor, self._normal)
+        if self._prism_cap:
+            # Deform the real solid live: the cap slides along its normal and
+            # the walls follow, so shrinking or growing the box stays clean in
+            # both directions (no overlay, no leftover edges).
+            self._apply_translate(viewport, self._normal * self.extrusion)
+        elif self._attached and abs(self.extrusion) > 1e-6:
+            # Recess (window/door): hide the flat inner face only once it starts
+            # moving, so the pocket shows. Before that it stays visible.
+            viewport.set_suppressed_faces({self.base_face})
+        else:
+            viewport.set_suppressed_faces(set())
         viewport.update()
 
     def on_click(self, ctx: ToolContext) -> None:
@@ -92,6 +125,15 @@ class PushPullTool(Tool):
             self.base_face = face
             self.extrusion = 0.0
             self.dragging = True
+            self._anchor = face.centroid()
+            self._normal = face.normal()
+            self._attached, self._prism_cap = self._classify_base(viewport.scene)
+            self._cap_positions = [QVector3D(v) for v in face.vertices]
+            self._preview_delta = QVector3D(0.0, 0.0, 0.0)
+            # The shaded solid preview takes over from the hover shade now.
+            # (A recess hides its flat inner face later, once it starts moving —
+            # see on_hover — so it doesn't flash transparent before any drag.)
+            viewport.set_hover(None)
             viewport.update()
             return
 
@@ -114,12 +156,16 @@ class PushPullTool(Tool):
         return True
 
     def on_cancel(self, viewport) -> None:
+        self._revert_translate(viewport)
+        viewport.set_hover(None)
+        viewport.set_suppressed_faces(set())
         self._reset()
         viewport.update()
 
     # ---- Visual preview -----------------------------------------------------
     def rubber_band_lines(self):
-        if not self.dragging or self.base_face is None:
+        # Prism caps deform the real geometry live — no overlay wireframe.
+        if not self.dragging or self.base_face is None or self._prism_cap:
             return []
         n = self.base_face.normal()
         d = self.extrusion
@@ -138,8 +184,14 @@ class PushPullTool(Tool):
     def preview_faces(self):
         """Shaded solid preview: the moved cap plus a side wall per base edge,
         so the box reads as a forming solid while dragging (SketchUp-style),
-        not just a wireframe."""
-        if not self.dragging or self.base_face is None or abs(self.extrusion) < 1e-6:
+        not just a wireframe. Prism caps deform the real solid instead, so they
+        return nothing here."""
+        if (
+            not self.dragging
+            or self.base_face is None
+            or self._prism_cap
+            or abs(self.extrusion) < 1e-6
+        ):
             return []
         n = self.base_face.normal()
         d = self.extrusion
@@ -153,18 +205,77 @@ class PushPullTool(Tool):
         return faces
 
     def value_label(self):
-        """Return ``(text, midpoint_world)`` for the floating distance label."""
-        if not self.dragging or self.base_face is None:
+        """Return ``(text, midpoint_world)`` for the floating distance label.
+        Uses the anchor captured at drag start, which stays fixed even while a
+        prism cap deforms the real geometry live."""
+        if not self.dragging or self._anchor is None:
             return None
-        anchor = self.base_face.centroid()
-        normal = self.base_face.normal()
-        midpoint = anchor + normal * (self.extrusion * 0.5)
+        midpoint = self._anchor + self._normal * (self.extrusion * 0.5)
         return (f"{abs(self.extrusion):.2f} m", midpoint)
 
     # ---- Internals ----------------------------------------------------------
+    def _classify_base(self, scene) -> tuple[bool, bool]:
+        """Classify the base face for previewing.
+
+        Returns ``(attached, prism_cap)``:
+        - ``attached`` — every edge is shared (embedded in a surface/solid), so
+          an inner face pushed in is a recess (hidden so the pocket shows).
+        - ``prism_cap`` — every edge backs onto a *perpendicular* wall, so the
+          push is a clean prism extend/shrink and can be previewed by live
+          translation (walls deform with the cap, clean both ways).
+        """
+        base = self.base_face.vertices
+        n = len(base)
+        faces = scene.faces
+        kinds = [
+            classify_push_edge(self.base_face, base[i], base[(i + 1) % n], faces)
+            for i in range(n)
+        ]
+        attached = all(kind != "free" for kind, _ in kinds)
+        prism_cap = bool(kinds) and all(kind == "perp" for kind, _ in kinds)
+        return attached, prism_cap
+
+    def _apply_translate(self, viewport, target_delta: QVector3D) -> None:
+        """Live-deform the solid so the cap sits at ``target_delta`` from its
+        start, by translating the incremental step (same mechanic as Move)."""
+        step = target_delta - self._preview_delta
+        if step.length() < 1e-12:
+            return
+        keys = {_key(p + self._preview_delta) for p in self._cap_positions}
+        translate_points(viewport.scene, keys, step)
+        self._preview_delta = target_delta
+
+    def _revert_translate(self, viewport) -> None:
+        """Undo the live deformation, returning the cap to its start position."""
+        if self._preview_delta.length() < 1e-12:
+            return
+        keys = {_key(p + self._preview_delta) for p in self._cap_positions}
+        translate_points(viewport.scene, keys, -self._preview_delta)
+        self._preview_delta = QVector3D(0.0, 0.0, 0.0)
+
     def _commit(self, viewport) -> None:
+        viewport.set_hover(None)  # the hovered face is about to be replaced
+        viewport.set_suppressed_faces(set())
+        # Undo any live prism-cap deformation so the real edit rebuilds the
+        # topology cleanly from the original positions (same final geometry,
+        # but on the undo stack as one atomic command).
+        self._revert_translate(viewport)
         face = self.base_face
         if face is None or abs(self.extrusion) < 1e-6:
+            self._reset()
+            viewport.update()
+            return
+
+        # A prism cap push is exactly a translation of the cap along its normal:
+        # the walls (and any host hole the cap sits in — a stacked block on a
+        # cube) deform through their shared vertices. Commit it as that, the same
+        # mechanic as the live preview. The extrude/extend path below would
+        # instead patch in coplanar strips and leave the host hole un-extended,
+        # which broke the next push on a neighbouring wall.
+        if self._prism_cap:
+            viewport.history.execute(
+                MoveVerticesCommand(self._cap_positions, self._normal * self.extrusion)
+            )
             self._reset()
             viewport.update()
             return
@@ -252,3 +363,9 @@ class PushPullTool(Tool):
         self.base_face = None
         self.extrusion = 0.0
         self.dragging = False
+        self._attached = False
+        self._prism_cap = False
+        self._anchor = None
+        self._normal = None
+        self._cap_positions = []
+        self._preview_delta = QVector3D(0.0, 0.0, 0.0)

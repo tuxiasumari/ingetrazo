@@ -37,6 +37,12 @@ class _StubViewport:
     def update(self):
         pass
 
+    def set_hover(self, entity):
+        pass
+
+    def set_suppressed_faces(self, faces):
+        pass
+
 
 def _embedded_scene():
     """Big face with a small face drawn inside it (so big is holed)."""
@@ -55,6 +61,24 @@ def _push(scene, base_face, distance):
     tool.dragging = True
     tool._commit(vp)
     return vp
+
+
+def _push_real(scene, base_face, distance):
+    """Push mimicking the tool's ``on_click`` classification, so prism-cap
+    commits go through the translation path the real app uses (not just the
+    extrude/extend path the bare ``_push`` exercises)."""
+    vp = _StubViewport(scene)
+    tool = PushPullTool()
+    tool.base_face = base_face
+    tool.extrusion = distance
+    tool.dragging = True
+    tool._anchor = base_face.centroid()
+    tool._normal = base_face.normal()
+    tool._attached, tool._prism_cap = tool._classify_base(scene)
+    prism_cap = tool._prism_cap  # _commit resets the tool, so capture it first
+    tool._cap_positions = [QVector3D(v) for v in base_face.vertices]
+    tool._commit(vp)
+    return prism_cap
 
 
 def _has_face_at_z(scene, z, nverts):
@@ -384,3 +408,54 @@ def test_corner_step_splits_corner_vertical_not_deletes_it():
     # The cube's corner vertical is split at the step level, not erased.
     assert has_edge(V(0, 0, 0), V(0, 0, 1.5))      # lower segment survives
     assert not has_edge(V(0, 0, 0), V(0, 0, 3))    # cut-away part gone
+
+
+def test_stacked_block_side_pushes_stay_clean():
+    # Cube, then a block stacked on its top (the block's footprint is a hole in
+    # the cube's top). Pushing the block's side walls must recognise that their
+    # base edge sits on that hole (a perpendicular neighbour) and deform the
+    # solid cleanly — no leftover strips, no dangling edges — so a second push
+    # on the adjacent wall is just as clean.
+    from core.edits import build_add_edges
+    from core.topology import _key, _loop_edges
+
+    scene = Scene()
+    hist = History(scene)
+    ground = [V(0, 0), V(4, 0), V(4, 4), V(0, 4)]
+    hist.execute(build_add_edges(
+        scene, [(ground[i], ground[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(ground))]))
+    _push(scene, scene.faces[0], 3.0)  # cube, top at z=3
+
+    inner = [V(1, 1, 3), V(3, 1, 3), V(3, 3, 3), V(1, 3, 3)]
+    hist.execute(build_add_edges(
+        scene, [(inner[i], inner[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(inner), auto=True)]))
+    inner_face = next(
+        f for f in scene.faces if len(f.vertices) == 4
+        and all(abs(v.z() - 3) < 1e-9 for v in f.vertices)
+        and max(v.x() for v in f.vertices) <= 3.001
+        and min(v.x() for v in f.vertices) >= 0.999
+    )
+    _push(scene, inner_face, 2.0)  # block 1..3 x 1..3 x 3..5
+
+    def block_wall(axis, val):
+        return next(
+            f for f in scene.faces
+            if all(abs((v.x() if axis == "x" else v.y()) - val) < 1e-9 for v in f.vertices)
+            and any(v.z() > 3.5 for v in f.vertices)
+        )
+
+    # Both side pushes must be recognised as clean prism walls.
+    assert _push_real(scene, block_wall("x", 1.0), 1.0), \
+        "wall on a host hole misread as a free extrusion"
+    assert _push_real(scene, block_wall("y", 1.0), 1.0)
+
+    face_edges = set()
+    for f in scene.faces:
+        face_edges.update(_loop_edges(f.vertices))
+        for hole in f.holes:
+            face_edges.update(_loop_edges(hole))
+    orphans = [e for e in scene.edges
+               if frozenset((_key(e.a), _key(e.b))) not in face_edges]
+    assert orphans == []
