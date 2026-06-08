@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
-from core.geometry import Edge, Face
+from core.mesh import Edge, Face
 from core.history import (
     CompoundCommand,
     DeleteEdgesCommand,

@@ -322,10 +322,8 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard("Discard current drawing?"):
             return
         scene = self.viewport.scene
-        scene.edges.clear()
+        scene.mesh.clear()
         scene.selection.clear()
-        if hasattr(scene, "faces"):
-            scene.faces.clear()
         scene.version += 1
         self.viewport.history.clear()
         self._current_path = None

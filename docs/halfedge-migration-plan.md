@@ -120,6 +120,17 @@ the full refactor, and leaves Level C open without commitment.
     the holes patch + hit the float32 bug for this; here it falls out of shared
     connectivity. Tests cover two-face, three-face (non-manifold), and
     split-then-move (gable) cases.
-  - **Next:** make `Scene` wrap a `Mesh`, then migrate the Commands
-    (Add/Delete Edge/Face, MoveVertices, PruneOrphans) to mutate it — the
-    coordinated swap that flips the live app, gated by the full test suite.
+  - **The swap (done, on branch `feat/mesh-engine-swap`):** `Scene` now wraps
+    a `Mesh` — `edges`/`faces` are read-only views over it. Every command
+    (`history.py`) mutates the mesh and **resolves its target geometry by
+    position at do-time**, so `edits.py`'s position-based plans execute onto the
+    real mesh unchanged; undo re-links the very objects removed. Move uses
+    `mesh.move_vertex` (shared vertices follow for free). `igz.load_into` and
+    `_on_new` rebuild via the mesh. The live app runs on the new engine (cube,
+    push, undo/redo, selection render verified). The mesh never holds duplicate
+    edges, which is stricter and more correct than the legacy model. 142 tests
+    pass. `core.geometry` still exists (used only for throwaway simulation
+    objects in `edits`/`topology`/push-pull preview) — its removal is M3.
+  - **Next — M3:** drop `core.geometry` and the `_key` position-matching that
+    the mesh makes redundant; simplify `edits`/`topology` to operate on
+    connectivity directly. **M4:** indexed `.igz` serialization.

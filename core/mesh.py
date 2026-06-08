@@ -276,6 +276,61 @@ class Mesh:
         if face in self.faces:
             self.faces.remove(face)
 
+    # ---- Re-link (undo support) --------------------------------------------
+    def relink_edge(self, edge: Edge) -> None:
+        """Re-attach a previously removed edge object (undo), preserving its
+        identity so other commands' references stay valid."""
+        if edge in self.edges:
+            return
+        edge.v0.edges.add(edge)
+        edge.v1.edges.add(edge)
+        self.edges.append(edge)
+        self._registry.setdefault(_key(edge.v0.position), edge.v0)
+        self._registry.setdefault(_key(edge.v1.position), edge.v1)
+
+    def relink_face(self, face: Face) -> None:
+        """Re-attach a previously removed face object (undo), recreating any
+        missing boundary edges and re-registering incidence."""
+        if face in self.faces:
+            return
+        for lp in (face.loop, *face.hole_loops):
+            n = len(lp)
+            for i in range(n):
+                edge = self._link_edge(lp[i], lp[(i + 1) % n])
+                if face not in edge.faces:
+                    edge.faces.append(face)
+        self.faces.append(face)
+
+    # ---- Holes --------------------------------------------------------------
+    def add_hole(self, face: Face, loop_positions: Iterable[QVector3D]) -> list[Vertex]:
+        """Punch a hole into ``face`` (a window/door drawn inside it). Welds the
+        loop's vertices, ensures its boundary edges, and registers the face on
+        them. Returns the vertex loop so undo can remove exactly this hole."""
+        loop = [self.vertex(p) for p in loop_positions]
+        face.hole_loops.append(loop)
+        n = len(loop)
+        for i in range(n):
+            edge = self._link_edge(loop[i], loop[(i + 1) % n])
+            if face not in edge.faces:
+                edge.faces.append(face)
+        return loop
+
+    def remove_hole(self, face: Face, loop: list[Vertex]) -> None:
+        if loop in face.hole_loops:
+            face.hole_loops.remove(loop)
+        n = len(loop)
+        for i in range(n):
+            edge = self.find_edge(loop[i], loop[(i + 1) % n])
+            if edge is not None and face in edge.faces:
+                edge.faces.remove(face)
+
+    # ---- Reset --------------------------------------------------------------
+    def clear(self) -> None:
+        self._registry.clear()
+        self.vertices.clear()
+        self.edges.clear()
+        self.faces.clear()
+
     # ---- Incidence queries --------------------------------------------------
     def edges_at(self, v: Vertex) -> set[Edge]:
         return set(v.edges)

@@ -61,7 +61,7 @@ from PySide6.QtOpenGL import (
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from core.camera import OrbitCamera
-from core.geometry import Edge, Face
+from core.mesh import Edge, Face
 from core.history import History
 from core.scene import Scene
 from core.snap import SnapResult, compute_snap

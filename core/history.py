@@ -1,13 +1,18 @@
-"""Undo / redo history using the command pattern.
+"""Undo / redo history using the command pattern, over the shared-vertex mesh.
 
 Every mutation that should be reversible goes through a :class:`Command`
-subclass. The viewport owns a :class:`History` that maintains the undo and
-redo stacks. Tools call ``viewport.history.execute(...)`` rather than
-mutating the scene directly.
+subclass. The viewport owns a :class:`History` that maintains the undo and redo
+stacks. Tools call ``viewport.history.execute(...)`` rather than mutating the
+scene directly.
 
-Why a command stack and not snapshots? Snapshots scale poorly with large
-scenes (every push/pull would copy the whole model). Commands store only
-the delta, so memory cost stays proportional to the action.
+Commands mutate ``scene.mesh`` (welding, incidence) and resolve the geometry
+they act on **by position at do-time**, so the position-based plans that
+:mod:`core.edits` builds (against a throwaway simulation) execute correctly
+onto the real mesh — and undo re-links the very objects that were removed,
+preserving identity for any references other commands hold.
+
+Why a command stack and not snapshots? Commands store only the delta, so memory
+cost stays proportional to the action, not to the model size.
 """
 from __future__ import annotations
 
@@ -16,16 +21,25 @@ from typing import Iterable, Optional
 
 from PySide6.QtGui import QVector3D
 
-from core.geometry import Edge, Face
+from core.mesh import Edge, Face, Vertex
 from core.topology import (
     _key,
     _loop_edges,
     find_containing_face,
-    find_duplicate_edge,
     loop_inside_face,
     orphaned_edges_at,
     subtract_loop_from_face,
 )
+
+
+def _find_face_by_loop(mesh, loop_positions) -> Optional[Face]:
+    """The mesh face whose outer loop matches ``loop_positions`` (by key), or
+    ``None``. Used to resolve a command's target face against the live mesh."""
+    target = frozenset(_key(p) for p in loop_positions)
+    for f in mesh.faces:
+        if frozenset(_key(p) for p in f.vertices) == target:
+            return f
+    return None
 
 
 class Command(ABC):
@@ -75,102 +89,96 @@ class History:
 # ---- Concrete commands ------------------------------------------------------
 
 class AddEdgeCommand(Command):
-    """Add a single edge, welding to coincident geometry (SketchUp-style).
-
-    With ``merge=True`` (the default), if an edge with the same endpoints
-    already exists the command becomes a no-op instead of stacking a
-    duplicate — so two rectangles sharing a border keep a single shared
-    edge. ``do`` records in ``_added`` whether it actually appended, so
-    ``undo`` only removes an edge *this* command created and never deletes
-    the pre-existing one it merged into. ``self.edge`` only ever holds the
-    edge this command owns (``None`` after a merged no-op).
-    """
+    """Add a single edge. The mesh always welds and dedups, so a coincident
+    edge is reused rather than duplicated; ``_owned`` records whether this
+    command actually created the edge, so undo only removes an edge it owns
+    (never the pre-existing one it merged into)."""
 
     def __init__(self, a: QVector3D, b: QVector3D, merge: bool = True) -> None:
-        self.a = a
-        self.b = b
-        self.merge = merge
+        self.a = QVector3D(a)
+        self.b = QVector3D(b)
+        self.merge = merge  # kept for API parity; the mesh never duplicates
         self.edge: Optional[Edge] = None
-        self._added = False
+        self._owned = False
 
     def do(self, scene) -> None:
-        if self.merge and find_duplicate_edge(scene.edges, self.a, self.b) is not None:
-            self._added = False
+        m = scene.mesh
+        if self._owned and self.edge is not None:
+            m.relink_edge(self.edge)  # redo of an edge this command owns
+            scene.version += 1
             return
-        if self.edge is None:
-            self.edge = Edge(self.a, self.b)
-        scene.edges.append(self.edge)
-        self._added = True
+        v0 = m.vertex_at(self.a)
+        v1 = m.vertex_at(self.b)
+        pre = m.find_edge(v0, v1) if (v0 is not None and v1 is not None) else None
+        if pre is not None:
+            # The mesh already has this edge — merged no-op. Own nothing, so
+            # ``self.edge`` stays None and undo leaves the pre-existing edge.
+            scene.version += 1
+            return
+        self.edge = m.add_edge(self.a, self.b)
+        self._owned = True
         scene.version += 1
 
     def undo(self, scene) -> None:
-        if not self._added or self.edge is None:
+        if not self._owned or self.edge is None:
             return
-        try:
-            scene.edges.remove(self.edge)
-        except ValueError:
-            pass
+        scene.mesh.remove_edge(self.edge)
         scene.selection.discard(self.edge)
-        self._added = False
         scene.version += 1
 
 
 class DeleteEdgesCommand(Command):
-    """Erase edges. A face can't outlive a bounding edge — SketchUp erases an
-    edge and its faces go with it — so every face that used a deleted edge on
-    its outer boundary is removed too (its other edges stay, now free). Hole
-    edges are left alone (deleting a window edge shouldn't drop the whole wall);
-    that merge-back case is handled separately later."""
+    """Erase edges (resolved by endpoint position). A face can't outlive a
+    bounding edge — SketchUp erases an edge and its faces go with it — so every
+    face that used a deleted edge on its *outer* boundary is removed too (its
+    other edges stay, now free). Hole edges are left alone."""
 
-    def __init__(self, edges: Iterable[Edge], cascade_faces: bool = True) -> None:
-        self.edges: list[Edge] = list(edges)
-        # True (user erase): take down faces bounded by a deleted edge.
-        # False (internal edge split): the edge is replaced by collinear
-        # sub-edges, so its faces keep their boundary and must survive.
+    def __init__(self, edges: Iterable, cascade_faces: bool = True) -> None:
+        self._endpoints = [(QVector3D(e.a), QVector3D(e.b)) for e in edges]
         self.cascade_faces = cascade_faces
+        self.removed_edges: list[Edge] = []
         self.removed_faces: list[Face] = []
 
     def do(self, scene) -> None:
-        edges_set = set(self.edges)
-        scene.edges[:] = [e for e in scene.edges if e not in edges_set]
-        for e in self.edges:
-            scene.selection.discard(e)
+        m = scene.mesh
+        self.removed_edges = []
+        for a, b in self._endpoints:
+            v0 = m.vertex_at(a)
+            v1 = m.vertex_at(b)
+            edge = m.find_edge(v0, v1) if (v0 is not None and v1 is not None) else None
+            if edge is not None:
+                self.removed_edges.append(edge)
 
-        if not self.cascade_faces:
-            scene.version += 1
-            return
-
-        gone = {frozenset((_key(e.a), _key(e.b))) for e in self.edges}
-        self.removed_faces = [
-            f for f in scene.faces if set(_loop_edges(f.vertices)) & gone
-        ]
-        if self.removed_faces:
-            dead = set(self.removed_faces)
-            scene.faces[:] = [f for f in scene.faces if f not in dead]
+        if self.cascade_faces:
+            gone = {frozenset((_key(a), _key(b))) for a, b in self._endpoints}
+            self.removed_faces = [
+                f for f in m.faces if set(_loop_edges(f.vertices)) & gone
+            ]
             for f in self.removed_faces:
+                m.remove_face(f)
                 scene.selection.discard(f)
+
+        for edge in self.removed_edges:
+            m.remove_edge(edge)
+            scene.selection.discard(edge)
         scene.version += 1
 
     def undo(self, scene) -> None:
-        for edge in self.edges:
-            if edge not in scene.edges:
-                scene.edges.append(edge)
+        m = scene.mesh
+        for edge in self.removed_edges:
+            m.relink_edge(edge)
         for face in self.removed_faces:
-            if face not in scene.faces:
-                scene.faces.append(face)
+            m.relink_face(face)
         self.removed_faces = []
-        # The original selection is not restored — SketchUp behaves the same.
         scene.version += 1
 
 
 class AddFaceCommand(Command):
     """Add a face, dividing any coplanar face it lands strictly inside.
 
-    When the new loop falls wholly within an existing face (e.g. a small
-    rectangle drawn inside a larger one), that mother face gains a hole so it
-    no longer overlaps the new face — SketchUp-style "draw inside a face and
-    it splits". The hole is recorded so ``undo`` can remove exactly the loop
-    this command punched, leaving the mother untouched.
+    When the new loop falls wholly within an existing face, that mother face
+    gains a hole so it no longer overlaps the new face. The hole is recorded so
+    undo removes exactly the loop this command punched.
     """
 
     def __init__(
@@ -180,86 +188,68 @@ class AddFaceCommand(Command):
         holes: Optional[Iterable[Iterable[QVector3D]]] = None,
     ) -> None:
         self.vertices = [QVector3D(v) for v in vertices]
-        # Pre-set holes (e.g. extending a holed wall via push/pull). Copied so
-        # the new face owns its loops. Only meaningful with auto=False, where
-        # the face's relationships are managed by the caller.
         self.preset_holes = (
             [[QVector3D(v) for v in loop] for loop in holes] if holes else None
         )
-        # When False, skip the hole/subdivision auto-logic — used by tools
-        # (push/pull) that build faces whose relationships they manage
-        # explicitly and don't want re-interpreted.
         self.auto = auto
         self.face: Optional[Face] = None
-        # Each punch is (face_that_gained_a_hole, the_exact_hole_loop_object),
-        # kept for identity-based removal on undo. Covers both directions:
-        # the new face landing inside an existing mother, *and* the new face
-        # enclosing existing smaller faces.
+        # (face_that_gained_a_hole, the vertex loop punched) for undo.
         self._punches: list[tuple[Face, list]] = []
-        # A face this command subdivided (drawn against its boundary) and the
-        # remainder face that replaced it, for undo.
         self._subdiv_mother: Optional[Face] = None
         self._subdiv_remainder: Optional[Face] = None
 
     def do(self, scene) -> None:
+        m = scene.mesh
         if self.face is None:
             holes = (
                 [list(loop) for loop in self.preset_holes]
-                if self.preset_holes else []
+                if self.preset_holes else None
             )
-            self.face = Face(list(self.vertices), holes)
-        scene.faces.append(self.face)
+            self.face = m.add_face(self.vertices, holes)
+        else:
+            m.relink_face(self.face)  # redo
 
         if not self.auto:
             scene.version += 1
             return
 
-        # Direction A: the new face falls inside an existing mother → the
-        # mother gains the new loop as a hole.
-        mother = find_containing_face(scene.faces, self.face.vertices, exclude=self.face)
+        # Direction A: the new face falls inside an existing mother → the mother
+        # gains the new loop as a hole.
+        mother = find_containing_face(m.faces, self.face.vertices, exclude=self.face)
         if mother is not None:
-            loop = list(self.face.vertices)
-            mother.holes.append(loop)
+            loop = m.add_hole(mother, self.face.vertices)
             self._punches.append((mother, loop))
 
-        # Direction B: the new face encloses existing smaller faces → the new
-        # face gains each of them as a hole (order independence).
-        for other in scene.faces:
+        # Direction B: the new face encloses existing smaller faces → it gains
+        # each of them as a hole.
+        for other in list(m.faces):
             if other is self.face:
                 continue
             if loop_inside_face(self.face, other.vertices):
-                loop = list(other.vertices)
-                self.face.holes.append(loop)
+                loop = m.add_hole(self.face, other.vertices)
                 self._punches.append((self.face, loop))
 
-        # Direction C: the new face was drawn against an existing face's
-        # boundary (a corner / edge rectangle), carving a connected sub-region
-        # rather than a hole. Replace that mother with its remainder; the new
-        # face stands on its own. Only when no hole relationship applied.
+        # Direction C: drawn against an existing face's boundary (corner / edge
+        # rectangle) → carve a connected sub-region. Only when no hole applied.
         if not self._punches:
-            for other in list(scene.faces):
+            for other in list(m.faces):
                 if other is self.face:
                     continue
                 remainder = subtract_loop_from_face(other, self.face.vertices)
                 if remainder is None:
                     continue
-                # Carry the mother's holes (e.g. a window already on the wall)
-                # into the remainder. If a hole isn't wholly inside it — it would
-                # straddle the cut or fall in the new sub-region — don't
-                # subdivide this face; that's safer than a broken split.
                 rem_holes: list[list[QVector3D]] = []
                 straddle = False
                 for hole in other.holes:
-                    if loop_inside_face(Face(list(remainder)), hole):
+                    if loop_inside_face(Face([Vertex(v) for v in remainder]), hole):
                         rem_holes.append([QVector3D(v) for v in hole])
                     else:
                         straddle = True
                         break
                 if straddle:
                     continue
-                rem_face = Face(list(remainder), rem_holes)
-                scene.faces.remove(other)
-                scene.faces.append(rem_face)
+                m.remove_face(other)
+                rem_face = m.add_face(remainder, rem_holes)
                 self._subdiv_mother = other
                 self._subdiv_remainder = rem_face
                 break
@@ -267,82 +257,61 @@ class AddFaceCommand(Command):
         scene.version += 1
 
     def undo(self, scene) -> None:
+        m = scene.mesh
         if self._subdiv_mother is not None:
-            if self._subdiv_remainder in scene.faces:
-                scene.faces.remove(self._subdiv_remainder)
-            if self._subdiv_mother not in scene.faces:
-                scene.faces.append(self._subdiv_mother)
+            if self._subdiv_remainder is not None:
+                m.remove_face(self._subdiv_remainder)
+            m.relink_face(self._subdiv_mother)
             self._subdiv_mother = None
             self._subdiv_remainder = None
         for face, loop in self._punches:
-            try:
-                face.holes.remove(loop)
-            except ValueError:
-                pass
+            m.remove_hole(face, loop)
         self._punches = []
         if self.face is not None:
-            try:
-                scene.faces.remove(self.face)
-            except ValueError:
-                pass
+            m.remove_face(self.face)
         scene.version += 1
 
 
 class DeleteFaceCommand(Command):
-    """Remove a face (e.g. a mother face being replaced by its chord-split
-    halves). Holes the face carried travel with it, so undo restores them."""
+    """Remove a face (resolved by its outer loop). Holes travel with it, so undo
+    restores them via relink."""
 
-    def __init__(self, face: Face) -> None:
-        self.face = face
+    def __init__(self, face) -> None:
+        self._loop = [QVector3D(v) for v in face.vertices]
+        self.face: Optional[Face] = None
 
     def do(self, scene) -> None:
-        try:
-            scene.faces.remove(self.face)
-        except ValueError:
-            pass
-        scene.selection.discard(self.face)
+        self.face = _find_face_by_loop(scene.mesh, self._loop)
+        if self.face is not None:
+            scene.mesh.remove_face(self.face)
+            scene.selection.discard(self.face)
         scene.version += 1
 
     def undo(self, scene) -> None:
-        if self.face not in scene.faces:
-            scene.faces.append(self.face)
+        if self.face is not None:
+            scene.mesh.relink_face(self.face)
         scene.version += 1
 
 
 def translate_points(scene, keys: set, delta: QVector3D) -> None:
-    """Shift every edge endpoint / face vertex whose position key is in ``keys``
-    by ``delta`` and bump the scene version.
+    """Move every shared vertex whose position key is in ``keys`` by ``delta``.
 
-    Shared by :class:`MoveVerticesCommand` and the Move tool's live preview, so
-    the on-the-fly drag and the committed command move geometry identically.
+    Because vertices are shared, every edge and face referencing a moved vertex
+    follows for free — the mechanic behind raising a ridge into a gable roof.
+    Shared by :class:`MoveVerticesCommand` and the Push/Pull live preview.
     """
-    for e in scene.edges:
-        if _key(e.a) in keys:
-            e.a = e.a + delta
-        if _key(e.b) in keys:
-            e.b = e.b + delta
-    for f in scene.faces:
-        f.vertices = [v + delta if _key(v) in keys else v for v in f.vertices]
-        if f.holes:
-            f.holes = [
-                [v + delta if _key(v) in keys else v for v in loop]
-                for loop in f.holes
-            ]
+    moving = [v for v in scene.mesh.vertices if _key(v.position) in keys]
+    for v in moving:
+        scene.mesh.move_vertex(v, delta)
     scene.version += 1
 
 
 class MoveVerticesCommand(Command):
-    """Translate every point at a set of positions by ``delta``.
+    """Translate every shared vertex at a set of positions by ``delta``.
 
-    Move works on *positions*, not entities: every edge endpoint and face
-    vertex (boundary or hole) coincident with one of ``positions`` shifts by
-    the same delta. Because identity-equal entities store separate copies of a
-    shared corner, moving them together is what keeps the mesh connected — drag
-    a ridge edge up and both roof slopes and the gable ends deform with it.
-
-    Topology is not restructured (no merge when a vertex lands on another); that
-    is a follow-up. A moved face may become non-planar, which the Newell normal
-    and the triangulator already tolerate.
+    A moved face may become non-planar, which the Newell normal and the
+    triangulator already tolerate. Topology is not restructured (no merge when a
+    vertex lands on another); that is a follow-up.
     """
 
     def __init__(self, positions: Iterable[QVector3D], delta: QVector3D) -> None:
@@ -353,15 +322,14 @@ class MoveVerticesCommand(Command):
         translate_points(scene, {_key(p) for p in self.src}, self.delta)
 
     def undo(self, scene) -> None:
-        # After do(), the moved points sit at src + delta; match those to undo.
         translate_points(scene, {_key(p + self.delta) for p in self.src}, -self.delta)
 
 
 class PruneOrphanEdgesCommand(Command):
     """Remove edges incident to ``vertices`` that, once the rest of a compound
     has run, border no face — the dangling lines left where push/pull carved
-    geometry away. The set is computed at ``do`` time so it reflects the real
-    post-carve scene; ``undo`` puts the swept edges back."""
+    geometry away. Computed at ``do`` time so it reflects the real post-carve
+    scene; ``undo`` re-links the swept edges."""
 
     def __init__(self, vertices: Iterable[QVector3D]) -> None:
         self.vertices = [QVector3D(v) for v in vertices]
@@ -369,18 +337,15 @@ class PruneOrphanEdgesCommand(Command):
 
     def do(self, scene) -> None:
         self.removed = orphaned_edges_at(scene.edges, scene.faces, self.vertices)
-        if not self.removed:
-            return
-        gone = set(self.removed)
-        scene.edges[:] = [e for e in scene.edges if e not in gone]
-        for e in self.removed:
-            scene.selection.discard(e)
-        scene.version += 1
+        for edge in self.removed:
+            scene.mesh.remove_edge(edge)
+            scene.selection.discard(edge)
+        if self.removed:
+            scene.version += 1
 
     def undo(self, scene) -> None:
-        for e in self.removed:
-            if e not in scene.edges:
-                scene.edges.append(e)
+        for edge in self.removed:
+            scene.mesh.relink_edge(edge)
         if self.removed:
             scene.version += 1
         self.removed = []

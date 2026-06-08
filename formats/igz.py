@@ -27,8 +27,6 @@ from pathlib import Path
 
 from PySide6.QtGui import QVector3D
 
-from core.geometry import Edge
-
 
 CURRENT_FORMAT = 1
 
@@ -71,24 +69,22 @@ def load_into(scene, path: Path) -> None:
 
     payload = data.get("scene", {})
 
-    scene.edges.clear()
+    scene.mesh.clear()
     scene.selection.clear()
-    if hasattr(scene, "faces"):
-        scene.faces.clear()
 
     for raw in payload.get("edges", []):
         a = QVector3D(*raw["a"])
         b = QVector3D(*raw["b"])
-        scene.edges.append(Edge(a, b))
+        try:
+            scene.mesh.add_edge(a, b)
+        except ValueError:
+            pass  # degenerate edge in the document — skip
 
-    if hasattr(scene, "faces") and payload.get("faces"):
-        from core.geometry import Face
-
-        for raw in payload["faces"]:
-            verts = [QVector3D(*v) for v in raw["vertices"]]
-            holes = [
-                [QVector3D(*v) for v in loop] for loop in raw.get("holes", [])
-            ]
-            scene.faces.append(Face(verts, holes))
+    for raw in payload.get("faces", []):
+        verts = [QVector3D(*v) for v in raw["vertices"]]
+        holes = [
+            [QVector3D(*v) for v in loop] for loop in raw.get("holes", [])
+        ]
+        scene.mesh.add_face(verts, holes)
 
     scene.version += 1

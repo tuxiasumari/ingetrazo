@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from PySide6.QtGui import QVector3D
 
-from core.geometry import Edge, Face
+from core.mesh import Edge, Face
 from core.history import MoveVerticesCommand, translate_points
 from core.topology import _key
 from tools.base import Tool, ToolContext

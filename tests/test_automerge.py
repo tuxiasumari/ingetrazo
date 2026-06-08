@@ -84,11 +84,14 @@ def test_merge_dedups_reversed_edge():
     assert len(scene.edges) == 1
 
 
-def test_merge_off_keeps_duplicate():
+def test_mesh_never_duplicates_even_with_merge_off():
+    # The shared-vertex mesh is the source of truth and cannot hold two edges
+    # between the same vertices, so it dedups regardless of the merge flag —
+    # stricter (and more correct) than the legacy model, which could stack one.
     scene, hist = _history()
     hist.execute(AddEdgeCommand(V(0, 0), V(1, 0)))
     hist.execute(AddEdgeCommand(V(0, 0), V(1, 0), merge=False))
-    assert len(scene.edges) == 2
+    assert len(scene.edges) == 1
 
 
 def test_undo_of_merged_noop_keeps_original():

@@ -1,10 +1,13 @@
-"""Scene container: edges, selection, version counter.
+"""Scene container, backed by a shared-vertex :class:`~core.mesh.Mesh`.
 
-The scene is a flat list at this stage. A proper scene graph with nested
-groups and transforms lands once components are introduced.
+``edges`` and ``faces`` are read-only views onto the mesh (lists of
+``mesh.Edge`` / ``mesh.Face``), so render, bounds and ``.igz`` save consume them
+unchanged. Every mutation goes through mesh methods (via the ``Command`` layer),
+which keep shared-vertex connectivity and incidence in sync — no more
+position-matching to rediscover topology.
 
-``version`` bumps on every mutation so the viewport can cheaply decide
-whether to rebuild its dynamic VBOs.
+``version`` bumps on every mutation so the viewport can cheaply decide whether
+to rebuild its dynamic VBOs.
 """
 from __future__ import annotations
 
@@ -13,23 +16,31 @@ from typing import Iterable
 
 from PySide6.QtGui import QVector3D
 
-from core.geometry import Edge, Face
+from core.mesh import Edge, Face, Mesh
 
 
 @dataclass
 class Scene:
-    edges: list[Edge] = field(default_factory=list)
-    faces: list[Face] = field(default_factory=list)
+    mesh: Mesh = field(default_factory=Mesh)
     selection: set = field(default_factory=set)
     version: int = 0
 
+    # ---- Geometry views (read-only over the mesh) ---------------------------
+    @property
+    def edges(self) -> list[Edge]:
+        return self.mesh.edges
+
+    @property
+    def faces(self) -> list[Face]:
+        return self.mesh.faces
+
+    # ---- Mutations ----------------------------------------------------------
     def add_edge(self, a: QVector3D, b: QVector3D) -> Edge:
-        edge = Edge(a, b)
-        self.edges.append(edge)
+        edge = self.mesh.add_edge(a, b)
         self.version += 1
         return edge
 
-    def select(self, edges: Iterable[Edge], additive: bool = False) -> None:
+    def select(self, edges: Iterable, additive: bool = False) -> None:
         if not additive:
             self.selection.clear()
         self.selection.update(edges)
@@ -43,17 +54,21 @@ class Scene:
     def delete_selection(self) -> None:
         if not self.selection:
             return
-        self.edges = [e for e in self.edges if e not in self.selection]
+        for ent in list(self.selection):
+            if isinstance(ent, Edge):
+                self.mesh.remove_edge(ent)
+            elif isinstance(ent, Face):
+                self.mesh.remove_face(ent)
         self.selection.clear()
         self.version += 1
 
     def clear(self) -> None:
-        if self.edges or self.faces or self.selection:
-            self.edges.clear()
-            self.faces.clear()
+        if self.mesh.edges or self.mesh.faces or self.selection:
+            self.mesh.clear()
             self.selection.clear()
             self.version += 1
 
+    # ---- Queries ------------------------------------------------------------
     def bounds(self) -> tuple[QVector3D, QVector3D] | tuple[None, None]:
         """Axis-aligned bounding box of all geometry. ``(None, None)`` if empty."""
         if not self.edges and not self.faces:
