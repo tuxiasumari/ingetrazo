@@ -173,6 +173,58 @@ class DeleteEdgesCommand(Command):
         scene.version += 1
 
 
+class EraseSelectionCommand(Command):
+    """Erase selected edges and faces, SketchUp-style.
+
+    An edge that divides two *coplanar* faces is dissolved and the faces merge
+    back into one (rubbing out a face's split line reunites it). Any other erased
+    edge takes the faces it bounds with it (a non-planar pair can't become one
+    face). Undo restores an identity-preserving snapshot — the merge restructures
+    connectivity too much for a clean per-edge inverse."""
+
+    def __init__(self, edges: Iterable, faces: Iterable = ()) -> None:
+        self._edge_endpoints = [(QVector3D(e.a), QVector3D(e.b)) for e in edges]
+        self._face_loops = [[QVector3D(v) for v in f.vertices] for f in faces]
+        self.snapshot: Optional[dict] = None
+
+    def do(self, scene) -> None:
+        m = scene.mesh
+        self.snapshot = m.capture_state()
+        for loop in self._face_loops:
+            f = _find_face_by_loop(m, loop)
+            if f is not None:
+                m.remove_face(f)
+                scene.selection.discard(f)
+        for a, b in self._edge_endpoints:
+            v0 = m.vertex_at(a)
+            v1 = m.vertex_at(b)
+            edge = m.find_edge(v0, v1) if (v0 is not None and v1 is not None) else None
+            if edge is None:
+                continue
+            faces = list(edge.faces)
+            merged = None
+            if len(faces) == 2 and QVector3D.dotProduct(
+                faces[0].normal(), faces[1].normal()
+            ) > 0.999:
+                merged = m.dissolve_coplanar_region(faces)  # reunite the split
+            if merged is None:
+                # Cascade: the edge and every face bounding it (a face can't
+                # outlive a bounding edge) go away.
+                ekey = frozenset((_key(edge.v0.position), _key(edge.v1.position)))
+                for f in [g for g in list(m.faces)
+                          if ekey in set(_loop_edges(g.vertices))]:
+                    m.remove_face(f)
+                    scene.selection.discard(f)
+                m.remove_edge(edge)
+            scene.selection.discard(edge)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self.snapshot is not None:
+            scene.mesh.restore_state(self.snapshot)
+            scene.version += 1
+
+
 class AddFaceCommand(Command):
     """Add a face, dividing any coplanar face it lands strictly inside.
 

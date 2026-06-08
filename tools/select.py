@@ -15,11 +15,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 
 from core.mesh import Edge, Face
-from core.history import (
-    CompoundCommand,
-    DeleteEdgesCommand,
-    DeleteFaceCommand,
-)
+from core.history import EraseSelectionCommand
 from tools.base import Tool, ToolContext
 
 
@@ -117,13 +113,10 @@ class SelectTool(Tool):
             if selection:
                 edges = [e for e in selection if isinstance(e, Edge)]
                 faces = [f for f in selection if isinstance(f, Face)]
-                commands = []
-                if edges:
-                    commands.append(DeleteEdgesCommand(edges))
-                commands.extend(DeleteFaceCommand(f) for f in faces)
-                if commands:
-                    cmd = commands[0] if len(commands) == 1 else CompoundCommand(commands)
-                    viewport.history.execute(cmd)
+                if edges or faces:
+                    # Erasing an edge between two coplanar faces merges them back
+                    # into one (SketchUp); any other erased edge takes its faces.
+                    viewport.history.execute(EraseSelectionCommand(edges, faces))
                     viewport.update()
             return True
         return False

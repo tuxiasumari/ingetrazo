@@ -300,3 +300,46 @@ def test_push_wall_whose_base_edge_spans_a_t_junction():
         and sorted({round(v.z(), 2) for v in f.vertices}) == [3.0, 5.0]
     ]
     assert not partition, "internal partition survived the T-junction overhang push"
+
+
+# ---- erase a coplanar divider edge → faces merge (SketchUp) ------------------
+
+def test_erase_coplanar_divider_merges_faces():
+    from core.history import EraseSelectionCommand
+
+    scene = Scene()
+    hist = History(scene)
+    m = scene.mesh
+    # A square split by a diagonal into two coplanar triangles.
+    m.add_face([V(0, 0, 0), V(2, 0, 0), V(2, 2, 0)])
+    m.add_face([V(0, 0, 0), V(2, 2, 0), V(0, 2, 0)])
+    diagonal = _shared_edge(m, V(0, 0, 0), V(2, 2, 0))
+    assert diagonal is not None and len(diagonal.faces) == 2
+
+    hist.execute(EraseSelectionCommand([diagonal]))
+    assert len(m.faces) == 1                                  # reunited
+    assert _shared_edge(m, V(0, 0, 0), V(2, 2, 0)) is None
+    assert abs(m.faces[0].area() - 4.0) < 1e-9
+
+    assert hist.undo() is True
+    assert len(m.faces) == 2
+    assert _shared_edge(m, V(0, 0, 0), V(2, 2, 0)) is not None
+
+
+def test_erase_non_coplanar_edge_cascades_faces():
+    from core.history import EraseSelectionCommand
+
+    scene = Scene()
+    hist = History(scene)
+    m = scene.mesh
+    # Two perpendicular faces sharing an edge (a box corner): erasing it can't
+    # merge them, so both go.
+    m.add_face([V(0, 0, 0), V(2, 0, 0), V(2, 2, 0), V(0, 2, 0)])  # floor
+    m.add_face([V(0, 0, 0), V(2, 0, 0), V(2, 0, 2), V(0, 0, 2)])  # wall
+    shared = _shared_edge(m, V(0, 0, 0), V(2, 0, 0))
+
+    hist.execute(EraseSelectionCommand([shared]))
+    assert len(m.faces) == 0                                      # both removed
+    assert _shared_edge(m, V(0, 0, 0), V(2, 0, 0)) is None
+    assert hist.undo() is True
+    assert len(m.faces) == 2
