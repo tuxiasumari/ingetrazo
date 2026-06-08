@@ -1099,7 +1099,24 @@ def orient_coplanar_faces(mesh) -> list:
     return flipped
 
 
-def heal_overlapping_faces(mesh, coverage: float = 0.5, partial: bool = False) -> list:
+def _mesh_is_flat(mesh) -> bool:
+    """Whether every face lies on one common plane — a flat 2D drawing, where the
+    aggressive partial-overlap cleanup is safe (in 3D, coplanar faces inside each
+    other are legitimate)."""
+    faces = mesh.faces
+    if len(faces) < 2:
+        return True
+    n0 = faces[0].normal()
+    d0 = QVector3D.dotProduct(n0, faces[0].vertices[0])
+    for f in faces[1:]:
+        if not _faces_coplanar(n0, f.normal()):
+            return False
+        if abs(QVector3D.dotProduct(n0, f.vertices[0]) - d0) > _PLANAR_TOLERANCE:
+            return False
+    return True
+
+
+def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
     """Clean up coplanar face overlaps that draw/delete sequences can leave:
 
     1. **Redundant nested holes** — incrementally subdividing a face can punch
@@ -1113,15 +1130,18 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial: bool = False) -
     3. **Reversed faces** — a face auto-faced with the wrong winding (so it would
        push the wrong way) is flipped to match its plane.
 
-    With ``partial=True`` (the explicit *Heal* command, never the automatic pass)
-    it also removes a small face whose body lies in another's solid region — a
-    partial overlap the auto-divide missed (e.g. a door-corner sliver). This is
-    unsafe to run automatically: valid 3D solids (stacked blocks, through-holes)
-    legitimately have coplanar faces inside each other, so it's gated behind the
-    deliberate command and meant for flat plans.
+    The partial-overlap pass also removes a small face whose body lies in
+    another's solid region — a partial overlap the auto-divide missed (e.g. a
+    door-corner sliver). It's unsafe in 3D (stacked blocks, through-holes
+    legitimately nest coplanar faces), so ``partial`` defaults to *auto*: on only
+    when the whole model is one flat plane (a 2D drawing). ``True``/``False``
+    force it.
 
     Returns the faces removed (the rebuilt/flipped ones don't count).
     """
+    if partial is None:
+        partial = _mesh_is_flat(mesh)
+
     # 0. Flip any reversed face so coplanar faces face the same way.
     orient_coplanar_faces(mesh)
 

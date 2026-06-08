@@ -24,12 +24,13 @@ def test_heal_removes_mother_covered_by_inset_subdivisions():
 
 
 def test_heal_keeps_a_face_with_a_small_island_inside():
-    # A big face with a small square inside it is NOT a redundant mother — the
-    # big face should keep being a face (it'd get a hole, not be deleted).
+    # A big face with a small square inside it is NOT a redundant mother (4% «
+    # 50%). Isolate the mother rule with partial=False (the flat partial pass
+    # would treat the island as an overlap and remove it — covered elsewhere).
     m = Mesh()
     m.add_face([V(0, 0), V(10, 0), V(10, 10), V(0, 10)])   # big (100)
     m.add_face([V(4, 4), V(6, 4), V(6, 6), V(4, 6)])       # small island (4%)
-    removed = heal_overlapping_faces(m)
+    removed = heal_overlapping_faces(m, partial=False)
     assert removed == []
     assert len(m.faces) == 2
 
@@ -82,15 +83,18 @@ def test_heal_flips_a_reversed_face():
     assert all(f.normal().z() > 0 for f in m.faces)          # both face +Z now
 
 
-def test_partial_overlap_removed_only_by_explicit_heal():
-    # A sliver sitting in a bigger face's solid (the door double-face). The
-    # automatic pass leaves it (would be unsafe in 3D); the explicit partial
-    # pass removes it.
-    m = Mesh()
-    m.add_face([V(0, 0), V(10, 0), V(10, 10), V(0, 10)])      # big solid
-    m.add_face([V(2, 2), V(2.2, 2), V(2.2, 4), V(2, 4)])      # sliver inside it
-    assert heal_overlapping_faces(m) == []                    # auto: kept
-    assert len(m.faces) == 2
-    removed = heal_overlapping_faces(m, partial=True)         # explicit: removed
-    assert len(removed) == 1
-    assert len(m.faces) == 1
+def test_partial_overlap_auto_on_flat_off_in_3d():
+    # A sliver in a bigger face's solid (the door double-face). On a flat plan
+    # the partial pass auto-removes it; once any 3D geometry is present it's
+    # gated off (3D solids legitimately nest coplanar faces).
+    flat = Mesh()
+    flat.add_face([V(0, 0), V(10, 0), V(10, 10), V(0, 10)])
+    flat.add_face([V(2, 2), V(2.2, 2), V(2.2, 4), V(2, 4)])
+    assert len(heal_overlapping_faces(flat)) == 1            # flat -> removed
+    assert len(flat.faces) == 1
+
+    d3 = Mesh()
+    d3.add_face([V(0, 0), V(10, 0), V(10, 10), V(0, 10)])
+    d3.add_face([V(2, 2), V(2.2, 2), V(2.2, 4), V(2, 4)])
+    d3.add_face([V(0, 0, 3), V(1, 0, 3), V(1, 1, 3), V(0, 1, 3)])  # 3D
+    assert heal_overlapping_faces(d3) == []                  # not flat -> kept

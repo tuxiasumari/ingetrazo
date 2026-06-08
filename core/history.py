@@ -801,8 +801,8 @@ class HealOverlapsCommand(Command):
 
     def do(self, scene) -> None:
         self.snapshot = scene.mesh.capture_state()
-        # The explicit command runs the aggressive partial-overlap pass too.
-        removed = heal_overlapping_faces(scene.mesh, partial=True)
+        # partial defaults to auto: the aggressive pass runs only on a flat plan.
+        removed = heal_overlapping_faces(scene.mesh)
         self.healed = len(removed)
         for f in removed:
             scene.selection.discard(f)
