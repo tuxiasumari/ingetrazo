@@ -83,18 +83,37 @@ def test_heal_flips_a_reversed_face():
     assert all(f.normal().z() > 0 for f in m.faces)          # both face +Z now
 
 
-def test_partial_overlap_auto_on_flat_off_in_3d():
-    # A sliver in a bigger face's solid (the door double-face). On a flat plan
-    # the partial pass auto-removes it; once any 3D geometry is present it's
-    # gated off (3D solids legitimately nest coplanar faces).
+def _solid_overlap(m):
+    from core.topology import _faces_coplanar, _point_in_face_solid
+    import itertools
+    n = 0
+    for a, b in itertools.combinations(m.faces, 2):
+        if not _faces_coplanar(a.normal(), b.normal()):
+            continue
+        if a.area() > b.area() and _point_in_face_solid(a, b.centroid()):
+            n += 1
+        if b.area() > a.area() and _point_in_face_solid(b, a.centroid()):
+            n += 1
+    return n
+
+
+def test_partial_overlap_resolved_by_holing_on_flat_off_in_3d():
+    # A sliver in a bigger face's solid (the door piece over the wall). On a flat
+    # plan it's resolved by punching a hole in the bigger face — the sliver stays
+    # as its own selectable face, no overlap. In 3D the pass is gated off.
     flat = Mesh()
     flat.add_face([V(0, 0), V(10, 0), V(10, 10), V(0, 10)])
-    flat.add_face([V(2, 2), V(2.2, 2), V(2.2, 4), V(2, 4)])
-    assert len(heal_overlapping_faces(flat)) == 1            # flat -> removed
-    assert len(flat.faces) == 1
+    flat.add_face([V(2, 2), V(4, 2), V(4, 4), V(2, 4)])      # the door piece
+    assert _solid_overlap(flat) == 1
+    heal_overlapping_faces(flat)
+    assert len(flat.faces) == 2                              # both faces kept
+    assert _solid_overlap(flat) == 0                         # no longer overlapping
+    assert any(f.holes for f in flat.faces)                 # big face gained a hole
+    assert any(not f.holes and abs(f.area() - 4.0) < 0.1 for f in flat.faces)
 
     d3 = Mesh()
     d3.add_face([V(0, 0), V(10, 0), V(10, 10), V(0, 10)])
-    d3.add_face([V(2, 2), V(2.2, 2), V(2.2, 4), V(2, 4)])
+    d3.add_face([V(2, 2), V(4, 2), V(4, 4), V(2, 4)])
     d3.add_face([V(0, 0, 3), V(1, 0, 3), V(1, 1, 3), V(0, 1, 3)])  # 3D
-    assert heal_overlapping_faces(d3) == []                  # not flat -> kept
+    heal_overlapping_faces(d3)
+    assert not any(f.holes for f in d3.faces)               # not flat -> untouched

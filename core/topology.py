@@ -1174,10 +1174,15 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
             mesh.remove_face(face)
             removed.append(face)
 
-    # 3. (Explicit Heal only) Remove a small face whose body lies in another's
-    #    solid region — a partial overlap the auto-divide missed.
+    # 3. (Flat plans) A small face whose body lies in a bigger coplanar face's
+    #    solid region is a partial overlap the auto-divide missed (a door piece
+    #    drawn over the wall). Don't delete it — the user wants it as its own
+    #    selectable face — instead punch a matching hole in the bigger face so
+    #    they no longer overlap. The small face fills that hole.
     if partial:
-        for face in list(mesh.faces):
+        from collections import defaultdict
+        punch: dict = defaultdict(list)
+        for face in mesh.faces:
             if face in removed:
                 continue
             centre = face.centroid()
@@ -1187,10 +1192,22 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
                     continue
                 if not _faces_coplanar(fn, g.normal()):
                     continue
+                if _g_inside_a_hole(g, face.vertices):
+                    continue  # already filling a hole — no overlap
                 if _point_in_face_solid(g, centre):
-                    mesh.remove_face(face)
-                    removed.append(face)
+                    punch[g].append(face)
                     break
+        for g, smalls in punch.items():
+            outer = [QVector3D(v) for v in g.vertices]
+            holes = [[QVector3D(v) for v in h] for h in g.holes]
+            holes += [[QVector3D(v) for v in s.vertices] for s in smalls]
+            mesh.remove_face(g)
+            try:
+                mesh.add_face(outer, holes)
+            except Exception:
+                # Degenerate hole arrangement — fall back to the face as it was.
+                mesh.add_face(outer, [[QVector3D(v) for v in h]
+                                      for h in g.holes] or None)
     return removed
 
 
