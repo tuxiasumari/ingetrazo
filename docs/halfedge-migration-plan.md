@@ -1,6 +1,6 @@
 # Topology engine migration: shared-vertex, non-manifold connectivity
 
-> Status: **in progress** — phase M0 started.
+> Status: **in progress** — M0 and M1 done.
 > Written in English per the repo convention (code/docs/comments in English).
 
 ## Why
@@ -103,7 +103,14 @@ the full refactor, and leaves Level C open without commitment.
 
 ## Progress log
 
-- **M0 (started):** `core/mesh.py` — `Vertex` (shared), `Edge` (radial face
+- **M0 (done):** `core/mesh.py` — `Vertex` (shared), `Edge` (radial face
   list), `Face` (vertex loops + holes), `Mesh` (vertex registry with weld-on-
   insert, edge dedup, face boundary-edge creation, incidence maintenance,
   `move_vertex`). Tests in `tests/test_mesh.py`. App untouched.
+- **M1 (done):** `mesh.Face` exposes `.vertices` / `.holes` as positions
+  (storage stays vertex loops `loop` / `hole_loops`), so a `Mesh` is read-
+  compatible with the legacy consumers. Proven by feeding a `Mesh` straight to
+  `formats.igz.save_scene` (the real save path reads `.edges`→`.a/.b` and
+  `.faces`→`.vertices/.holes/.triangulate`). App still untouched.
+- **Next — M2:** migrate mutations one at a time behind the `Command` facade,
+  starting with add-edge/add-face/weld, then split, then move, then push/pull.

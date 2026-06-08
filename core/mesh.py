@@ -105,24 +105,31 @@ class Edge:
 
 class Face:
     """A planar polygon: an outer ``loop`` of shared vertices, plus optional
-    inner loops (``holes``). Geometry is derived from the vertices' positions,
-    so it follows automatically when a shared vertex moves.
+    inner ``hole_loops``. Geometry is derived from the vertices' positions, so
+    it follows automatically when a shared vertex moves.
+
+    Connectivity is kept as vertex loops (``loop`` / ``hole_loops``). The
+    ``vertices`` and ``holes`` properties return the same loops as plain
+    positions, matching the legacy ``core.geometry.Face`` read interface — so
+    rendering, bounds and ``.igz`` save consume a ``mesh.Face`` unchanged (M1).
     """
 
-    __slots__ = ("loop", "holes")
+    __slots__ = ("loop", "hole_loops")
 
     def __init__(
-        self, loop: list[Vertex], holes: Optional[list[list[Vertex]]] = None
+        self, loop: list[Vertex], hole_loops: Optional[list[list[Vertex]]] = None
     ) -> None:
         self.loop = list(loop)
-        self.holes = [list(h) for h in holes] if holes else []
+        self.hole_loops = [list(h) for h in hole_loops] if hole_loops else []
 
-    # ---- Positions ----------------------------------------------------------
-    def positions(self) -> list[QVector3D]:
+    # ---- Legacy-compatible read interface (positions) -----------------------
+    @property
+    def vertices(self) -> list[QVector3D]:
         return [v.position for v in self.loop]
 
-    def hole_positions(self) -> list[list[QVector3D]]:
-        return [[v.position for v in h] for h in self.holes]
+    @property
+    def holes(self) -> list[list[QVector3D]]:
+        return [[v.position for v in h] for h in self.hole_loops]
 
     # ---- Geometry (ported from legacy Face, over shared positions) ----------
     def _newell(self) -> QVector3D:
@@ -166,7 +173,7 @@ class Face:
             return []
         from core.triangulate import triangulate
 
-        return triangulate(self.positions(), self.hole_positions(), self.normal())
+        return triangulate(self.vertices, self.holes, self.normal())
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"Face({len(self.loop)} verts, {len(self.holes)} holes)"
@@ -248,7 +255,7 @@ class Mesh:
         face — radial, so an edge can carry several)."""
         loop = [self.vertex(p) for p in loop_positions]
         holes = [[self.vertex(p) for p in h] for h in (hole_loops or [])]
-        face = Face(loop, holes)
+        face = Face(loop, holes)  # Face stores them as hole_loops (vertices)
         for lp in (loop, *holes):
             n = len(lp)
             for i in range(n):
@@ -260,7 +267,7 @@ class Mesh:
     def remove_face(self, face: Face) -> None:
         """Drop a face and detach it from its boundary edges' radial lists. The
         edges themselves stay (they may border other faces or stand alone)."""
-        for lp in (face.loop, *face.holes):
+        for lp in (face.loop, *face.hole_loops):
             n = len(lp)
             for i in range(n):
                 edge = self.find_edge(lp[i], lp[(i + 1) % n])

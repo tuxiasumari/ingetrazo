@@ -118,7 +118,7 @@ def test_move_vertex_drags_all_incident_geometry():
     m.move_vertex(m.vertex_at(V(1, 1)), V(0, 0, 1))
 
     def raised(face):
-        return {(round(p.x()), round(p.y()), round(p.z())) for p in face.positions()
+        return {(round(p.x()), round(p.y()), round(p.z())) for p in face.vertices
                 if abs(p.z() - 1) < 1e-6}
 
     assert raised(left) == {(1, 0, 1), (1, 1, 1)}
@@ -155,3 +155,41 @@ def test_add_face_creates_boundary_edges_and_reuses_them():
     # An adjacent face reuses the shared edge instead of stacking a duplicate.
     m.add_face([V(1, 0), V(2, 0), V(2, 1), V(1, 1)])
     assert len(m.edges) == 7  # 4 + 3 new (one shared)
+
+
+# ---- M1: legacy read compatibility ------------------------------------------
+
+def test_mesh_face_exposes_positions_like_legacy():
+    m = Mesh()
+    f = m.add_face(
+        [V(0, 0), V(2, 0), V(2, 2), V(0, 2)],
+        [[V(0.5, 0.5), V(1.5, 0.5), V(1.5, 1.5), V(0.5, 1.5)]],
+    )
+    # .vertices / .holes read as plain positions (not Vertex objects), matching
+    # the legacy core.geometry.Face interface the renderer/save consume.
+    assert all(isinstance(p, QVector3D) for p in f.vertices)
+    assert all(isinstance(p, QVector3D) for loop in f.holes for p in loop)
+    # connectivity is still vertices underneath
+    assert all(isinstance(v, Vertex) for v in f.loop)
+    # a holed face triangulates as a donut (more than a plain quad's 2 tris)
+    assert len(f.triangulate()) > 2
+
+
+def test_mesh_is_read_compatible_with_igz_save(tmp_path):
+    import json
+    from formats.igz import save_scene
+
+    m = Mesh()
+    m.add_face(
+        [V(0, 0), V(4, 0), V(4, 4), V(0, 4)],
+        [[V(1, 1), V(3, 1), V(3, 3), V(1, 3)]],
+    )
+    m.add_edge(V(0, 0), V(0, 5))
+
+    out = tmp_path / "mesh.igz"
+    save_scene(m, out)  # reads mesh.edges (.a/.b) + mesh.faces (.vertices/.holes)
+    data = json.loads(out.read_text())
+
+    assert data["scene"]["faces"][0]["vertices"][0] == [0.0, 0.0, 0.0]
+    assert len(data["scene"]["faces"][0]["holes"][0]) == 4
+    assert len(data["scene"]["edges"]) >= 1
