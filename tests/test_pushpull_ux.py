@@ -219,3 +219,175 @@ def test_parse_value_buffer_units_and_sign():
     assert parse("-30cm") == -0.3
     assert parse("abc") is None
     assert parse("2x") is None
+
+
+# ---- clamp: "Offset limited to ..." -------------------------------------------
+
+def _locked_tool(scene, face, dist):
+    """Build the tool exactly as a real drag-lock click would, then set the
+    extrusion (as if dragged/typed) and return it ready to clamp/commit."""
+    tool = PushPullTool()
+    tool.base_face = face
+    tool.dragging = True
+    tool._anchor = face.centroid()
+    tool._normal = face.normal()
+    tool._attached, tool._prism_cap = tool._classify_base(scene)
+    tool._cap_positions = [QVector3D(v) for v in face.vertices]
+    tool._compute_inward_limit(scene)
+    tool.extrusion = dist
+    tool._clamp_extrusion()
+    return tool
+
+
+def test_inward_limit_detected_on_prism_cap():
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, height=3.0)
+    tool = _locked_tool(scene, _top(scene, 3.0), -1.0)
+    assert tool._limit_in is not None and abs(tool._limit_in - 3.0) < 1e-6
+
+
+def test_shrink_beyond_height_clamps():
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, height=3.0)
+    tool = _locked_tool(scene, _top(scene, 3.0), -99.0)
+    assert tool.extrusion == -3.0          # clamped to the solid's extent
+
+
+def test_shrink_to_exact_limit_collapses_to_single_face():
+    # Pushing the top all the way down flattens the box to one face — how
+    # SketchUp deletes a volume with Push/Pull.
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, height=3.0)
+    tool = _locked_tool(scene, _top(scene, 3.0), -99.0)
+    tool._commit(_StubViewport(scene))
+    m = scene.mesh
+    assert len(m.faces) == 1
+    assert all(abs(v.z()) < 1e-9 for v in m.faces[0].vertices)
+    assert len(m.edges) == 4 and len(m.vertices) == 4
+
+
+def test_corner_step_clamped_opens_notch_through_floor():
+    # A corner rect pushed deeper than the cube is tall: clamp to the height,
+    # landing flush on the floor plane — the notch opens clear through and the
+    # result is a watertight L-section solid.
+    from core.orient import signed_volume
+
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, size=10.0, height=3.0)
+    corner_loop = [V(0, 0, 3), V(4, 0, 3), V(4, 4, 3), V(0, 4, 3)]
+    hist.execute(build_add_edges(
+        scene, [(corner_loop[i], corner_loop[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(corner_loop))]))
+    corner = next(
+        f for f in scene.faces
+        if all(abs(v.z() - 3) < 1e-9 for v in f.vertices) and len(f.vertices) == 4
+        and max(v.x() for v in f.vertices) <= 4.001
+        and max(v.y() for v in f.vertices) <= 4.001
+    )
+    tool = _locked_tool(scene, corner, -99.0)
+    assert tool.extrusion == -3.0
+    tool._commit(_StubViewport(scene))
+    m = scene.mesh
+    assert all(len(e.faces) == 2 for e in m.edges), "not watertight"
+    assert signed_volume(m) > 0
+    # The floor lost the corner region: it is an L (6 vertices), not a square.
+    floors = [f for f in m.faces if all(abs(v.z()) < 1e-9 for v in f.vertices)]
+    assert len(floors) == 1 and len(floors[0].vertices) == 6
+
+
+def test_through_target_does_not_clamp():
+    # A window inside a thin wall: the far face is a punch target, not a
+    # blocker — the push past it must stay a through-hole, never a clamp.
+    scene = Scene()
+    hist = History(scene)
+    floor = [V(0, 0, 0), V(4, 0, 0), V(4, 0.3, 0), V(0, 0.3, 0)]
+    hist.execute(build_add_edges(
+        scene, [(floor[i], floor[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(floor))]))
+    _push(scene, scene.faces[0], 3.0)
+    window = [V(1, 0, 1), V(3, 0, 1), V(3, 0, 2), V(1, 0, 2)]
+    hist.execute(build_add_edges(
+        scene, [(window[i], window[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(window))]))
+    winface = next(
+        f for f in scene.faces if len(f.vertices) == 4
+        and all(abs(v.y()) < 1e-9 for v in f.vertices)
+        and max(v.x() for v in f.vertices) <= 3.001
+        and min(v.x() for v in f.vertices) >= 0.999
+    )
+    tool = _locked_tool(scene, winface, -0.4)
+    assert tool._limit_in is None          # nothing blocks: far face is punchable
+    assert tool.extrusion == -0.4
+    tool._commit(_StubViewport(scene))
+    backs = [f for f in scene.faces
+             if all(abs(v.y() - 0.3) < 1e-4 for v in f.vertices) and f.holes]
+    assert len(backs) == 1                 # punched clean through
+
+
+def test_outward_pull_never_clamped():
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, height=3.0)
+    tool = _locked_tool(scene, _top(scene, 3.0), 50.0)
+    assert tool.extrusion == 50.0
+
+
+# ---- distance inference (hover a vertex mid-push) ------------------------------
+
+class _InferViewport(_StubViewport):
+    """Viewport stub with a trivial top-view projection: world (x, z) → pixel
+    (x*10, -z*10), so vertices land at predictable screen spots."""
+
+    snap_threshold_px = 9.0
+
+    def _world_to_pixel(self, world):
+        return (world.x() * 10.0, -world.z() * 10.0)
+
+
+def test_hovering_vertex_infers_distance():
+    from PySide6.QtCore import QPointF
+    from tools.base import ToolContext
+
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, height=3.0)                      # cube A
+    other = [V(6, 0, 0), V(8, 0, 0), V(8, 2, 0), V(6, 2, 0)]
+    hist.execute(build_add_edges(
+        scene, [(other[i], other[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(other))]))
+    ref = next(f for f in scene.faces
+               if all(abs(v.z()) < 1e-9 for v in f.vertices)
+               and min(v.x() for v in f.vertices) >= 5.999)
+    # Extrude the block upward regardless of the drawn sheet's winding.
+    _push(scene, ref, 5.0 if ref.normal().z() > 0 else -5.0)   # block top z=5
+
+    vp = _InferViewport(scene)
+    tool = PushPullTool()
+    top = _top(scene, 3.0)
+    tool.base_face = top
+    tool.dragging = True
+    tool._anchor = top.centroid()
+    tool._normal = top.normal()
+    tool._attached, tool._prism_cap = tool._classify_base(scene)
+    tool._cap_positions = [QVector3D(v) for v in top.vertices]
+
+    # Cursor over the reference block's top corner (6, 0, 5) → pixel (60, -50).
+    ctx = ToolContext(viewport=vp, world=QVector3D(), screen=QPointF(60.0, -50.0),
+                      modifiers=Qt.NoModifier, snap=None)
+    d = tool._infer_reference_distance(ctx)
+    # Anchor is the cube top (z=3); the hovered corner is at z=5 → push +2.
+    assert d is not None and abs(d - 2.0) < 1e-6
+
+    # Cursor over empty space → no inference.
+    ctx2 = ToolContext(viewport=vp, world=QVector3D(), screen=QPointF(500.0, 500.0),
+                       modifiers=Qt.NoModifier, snap=None)
+    assert tool._infer_reference_distance(ctx2) is None
+
+    # The base face's own corners never pin the drag.
+    ctx3 = ToolContext(viewport=vp, world=QVector3D(), screen=QPointF(0.0, -30.0),
+                       modifiers=Qt.NoModifier, snap=None)
+    assert tool._infer_reference_distance(ctx3) is None

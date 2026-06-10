@@ -48,6 +48,7 @@ from core.history import (
     run_stitch,
     translate_points,
 )
+from core.arrangement import _interior_point, _point_in_polygon, plane_basis
 from core.orient import orient_outward
 from core.cap_rebuild import apply_rebuild, crack_planes, plane_key, seam_planes
 from core.topology import (
@@ -58,6 +59,25 @@ from core.topology import (
     refine_loop_with_points,
 )
 from tools.base import Tool, ToolContext
+
+
+def _project_loop_2d(loop, normal):
+    u, v = plane_basis(normal)
+    return [(QVector3D.dotProduct(p, u), QVector3D.dotProduct(p, v)) for p in loop]
+
+
+def _loops_overlap_2d(a_xy, b_xy) -> bool:
+    """Whether two loops projected to the same plane overlap laterally: a
+    representative interior point of one inside the other, or any vertex
+    strictly inside. Good for the push-clamp candidates (a far cap under the
+    whole loop, a floor under a corner notch); exotic offset-cross overlaps
+    with no contained vertex are not the clamp's concern. Holes are ignored."""
+    if _point_in_polygon(_interior_point(a_xy), b_xy):
+        return True
+    if _point_in_polygon(_interior_point(b_xy), a_xy):
+        return True
+    return any(_point_in_polygon(p, b_xy) for p in a_xy) or \
+        any(_point_in_polygon(p, a_xy) for p in b_xy)
 
 
 def _swept_by_push(neighbour: Face, push_normal: QVector3D) -> bool:
@@ -100,6 +120,9 @@ class PushPullTool(Tool):
         # division), the extrusion stacks as a new segment instead of growing
         # the neighbours — how floors are stacked in SketchUp.
         self._keep_base: bool = False
+        # Deepest allowed inward push (positive, along −normal), computed at
+        # drag start; None = unbounded. SketchUp's "Offset limited to" clamp.
+        self._limit_in: float | None = None
         # Whether the base face is embedded in a solid (its boundary edges are
         # shared), so an inner face pushed in is a recess (window/door pocket).
         self._attached: bool = False
@@ -138,10 +161,19 @@ class PushPullTool(Tool):
             return
         # Ctrl can be pressed/released mid-drag; the live preview follows.
         self._keep_base = bool(ctx.modifiers & Qt.ControlModifier)
-        projected = viewport._project_to_lock_line(
-            self._anchor, self._normal, ctx.screen.x(), ctx.screen.y()
-        )
-        self.extrusion = QVector3D.dotProduct(projected - self._anchor, self._normal)
+        # Work on the clean mesh: revert the preview before reading geometry,
+        # so reference inference never sees the forming solid's moving points.
+        self._revert_preview(viewport)
+        inferred = self._infer_reference_distance(ctx)
+        if inferred is not None:
+            self.extrusion = inferred
+        else:
+            projected = viewport._project_to_lock_line(
+                self._anchor, self._normal, ctx.screen.x(), ctx.screen.y()
+            )
+            self.extrusion = QVector3D.dotProduct(
+                projected - self._anchor, self._normal)
+        self._clamp_extrusion()
         # Apply the real commit to the mesh as a live preview (reverting last
         # frame's first), so the forming solid renders exactly as it will commit.
         self._apply_preview(viewport)
@@ -160,6 +192,7 @@ class PushPullTool(Tool):
             self._normal = face.normal()
             self._attached, self._prism_cap = self._classify_base(viewport.scene)
             self._cap_positions = [QVector3D(v) for v in face.vertices]
+            self._compute_inward_limit(viewport.scene)
             self._preview_snapshot = None
             # The live preview takes over from the hover shade now.
             viewport.set_hover(None)
@@ -193,12 +226,14 @@ class PushPullTool(Tool):
             self._normal = face.normal()
             self._attached, self._prism_cap = self._classify_base(viewport.scene)
             self._cap_positions = [QVector3D(v) for v in face.vertices]
+            self._compute_inward_limit(viewport.scene)
             self._preview_snapshot = None
         elif abs(self.extrusion) > 1e-6:
             # Mid-drag with a real distance: treat as the commit click.
             self._commit(viewport)
             return
         self.extrusion = last
+        self._clamp_extrusion()
         self._commit(viewport)
 
     def on_value(self, viewport, value) -> bool:
@@ -211,6 +246,7 @@ class PushPullTool(Tool):
         # a negative one reverses it, SketchUp-style.
         sign = -1.0 if self.extrusion < 0.0 else 1.0
         self.extrusion = sign * value
+        self._clamp_extrusion()
         self._commit(viewport)
         return True
 
@@ -258,6 +294,71 @@ class PushPullTool(Tool):
         return (f"{abs(self.extrusion):.2f} m", midpoint)
 
     # ---- Internals ----------------------------------------------------------
+    def _compute_inward_limit(self, scene) -> None:
+        """How far the face can be pushed *into* the solid before the sweep
+        would shoot past blocking geometry — SketchUp's "Offset limited to" rule.
+
+        A blocker is a parallel face on the material side (−normal: solids are
+        committed outward) that overlaps the base loop laterally but can't be
+        punched (the loop is not strictly inside it — those are through-hole
+        targets and stay unbounded; the punch stops at them on its own).
+        Pushing exactly *to* the limit is allowed: landing flush dissolves or
+        opens the geometry (collapse a box flat, cut a notch through a floor).
+        Stored in ``self._limit_in``; ``None`` = unbounded."""
+        self._limit_in = None
+        if not self._attached or self.base_face is None:
+            return
+        n = (self._normal if self._normal is not None
+             else self.base_face.normal()).normalized()
+        anchor = (self._anchor if self._anchor is not None
+                  else self.base_face.centroid())
+        base_xy = _project_loop_2d(self.base_face.vertices, n)
+        for g in scene.faces:
+            if g is self.base_face:
+                continue
+            gn = g.normal().normalized()
+            if abs(QVector3D.dotProduct(gn, n)) < 0.999:
+                continue  # not parallel
+            dist = QVector3D.dotProduct(anchor - g.centroid(), n)
+            if dist <= 1e-6:
+                continue  # coplanar or on the outward side
+            back_loop = [v - n * dist for v in self.base_face.vertices]
+            if loop_inside_face(g, back_loop):
+                continue  # a through-hole target, not a blocker
+            if not _loops_overlap_2d(base_xy, _project_loop_2d(g.vertices, n)):
+                continue  # laterally elsewhere (another building's wall)
+            if self._limit_in is None or dist < self._limit_in:
+                self._limit_in = dist
+
+    def _clamp_extrusion(self) -> None:
+        if self._limit_in is not None and self.extrusion < -self._limit_in:
+            self.extrusion = -self._limit_in
+
+    def _infer_reference_distance(self, ctx: ToolContext):
+        """Distance making the moved face level with the model vertex under the
+        cursor — SketchUp's mid-push inference ("push until even with that
+        corner"). Scans the *clean* mesh (the caller reverts the live preview
+        first, so the forming solid's own moving vertices never feed back).
+        Returns ``None`` when no vertex is within the snap threshold."""
+        vp = ctx.viewport
+        sx, sy = ctx.screen.x(), ctx.screen.y()
+        thr = getattr(vp, "snap_threshold_px", 9.0)
+        exclude = {_key(p) for p in self._cap_positions}
+        best = None
+        meshes = [vp.scene.mesh] + [g.mesh for g in getattr(vp.scene, "groups", [])]
+        for mesh in meshes:
+            for vtx in mesh.vertices:
+                if _key(vtx.position) in exclude:
+                    continue  # the base's own corners would pin the drag to 0
+                pix = vp._world_to_pixel(vtx.position)
+                if pix is None:
+                    continue
+                d2 = (pix[0] - sx) ** 2 + (pix[1] - sy) ** 2
+                if d2 <= thr * thr and (best is None or d2 < best[0]):
+                    best = (d2, QVector3D.dotProduct(
+                        vtx.position - self._anchor, self._normal))
+        return best[1] if best else None
+
     def _classify_base(self, scene) -> tuple[bool, bool]:
         """Classify the base face for previewing.
 
@@ -541,6 +642,7 @@ class PushPullTool(Tool):
         self._attached = False
         self._prism_cap = False
         self._keep_base = False
+        self._limit_in = None
         self._anchor = None
         self._normal = None
         self._cap_positions = []

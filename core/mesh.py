@@ -464,6 +464,21 @@ class Mesh:
             for dup in vs[1:]:
                 self._weld_into(keep, dup)
             changed = True
+        if changed:
+            # A full collapse (a box pushed flat) can leave two faces occupying
+            # the same cycle (the old top welded onto the bottom). Keep one —
+            # SketchUp leaves a single face when a solid is flattened away.
+            seen: dict = {}
+            for f in list(self.faces):
+                sig = frozenset(
+                    frozenset((id(lp[i]), id(lp[(i + 1) % len(lp)])))
+                    for lp in (f.loop, *f.hole_loops)
+                    for i in range(len(lp))
+                )
+                if sig in seen:
+                    self.remove_face(f)
+                else:
+                    seen[sig] = f
         return changed
 
     def _weld_into(self, keep: Vertex, dup: Vertex) -> None:
