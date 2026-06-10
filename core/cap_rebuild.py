@@ -88,16 +88,30 @@ def _region_test_point(outer_xy, holes_xy):
     return p
 
 
-def _union_outline(solid_regions_xy, keep_keys: Optional[set] = None) -> list:
+def _on_seg2(p, a, b, tol: float = _TOL / 2) -> bool:
+    """Whether 2D point ``p`` lies on segment ``a``–``b``. Tolerance is tied
+    to the arrangement's (its split points and float32-projected mesh
+    coordinates can deviate well past 1e-6 on slanted planes)."""
+    abx, aby = b[0] - a[0], b[1] - a[1]
+    apx, apy = p[0] - a[0], p[1] - a[1]
+    if abs(abx * apy - aby * apx) > tol * max(1.0, abs(abx) + abs(aby)):
+        return False
+    dot = apx * abx + apy * aby
+    return -tol <= dot <= abx * abx + aby * aby + tol
+
+
+def _union_outline(solid_regions_xy, keep_segs=None) -> list:
     """Union a set of 2D regions (each ``(outer, [holes])`` wound as the
     arrangement winds them — outer CCW, holes CW) into ``[(outer, [holes])]``,
     dropping every edge interior to the union (it appears in two solid regions,
     once in each direction, so the directions cancel).
 
-    ``keep_keys`` (undirected ``frozenset`` of 2D point keys) are **creases**:
-    edges a perpendicular face stands on. They never cancel, so the union keeps
-    a face boundary there — two roof slabs over a dividing wall stay two faces
-    with a visible ridge, SketchUp-style."""
+    ``keep_segs`` (2D segments) are **creases**: edges a perpendicular face
+    stands on. Union edges *lying on* one never cancel, so the union keeps a
+    face boundary there — two roof slabs over a dividing wall stay two faces
+    with a visible ridge, SketchUp-style. The test is geometric (midpoint on
+    segment): the arrangement splits edges at crossings, so an endpoint-pair
+    match would lose the crease on the split-off pieces."""
     dir_count: dict = defaultdict(int)
     coords: dict = {}
     for outer, holes in solid_regions_xy:
@@ -110,13 +124,21 @@ def _union_outline(solid_regions_xy, keep_keys: Optional[set] = None) -> list:
                 coords[kb] = b
                 dir_count[(ka, kb)] += 1
 
+    def _is_crease(ka, kb) -> bool:
+        if not keep_segs:
+            return False
+        pa, pb = coords[ka], coords[kb]
+        mid = ((pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0)
+        return any(_on_seg2(mid, a, b) and _on_seg2(pa, a, b)
+                   and _on_seg2(pb, a, b) for a, b in keep_segs)
+
     # Net direction per undirected edge: interior edges cancel (a→b and b→a),
     # boundary edges survive in the direction that keeps the solid on the left.
     # Crease edges skip the cancellation — both directed copies survive, so the
     # trace closes one loop on each side of the crease.
     survivors: dict = defaultdict(int)
     for (ka, kb), c in dir_count.items():
-        if keep_keys and frozenset((ka, kb)) in keep_keys:
+        if _is_crease(ka, kb):
             survivors[(ka, kb)] += c
             continue
         net = c - dir_count.get((kb, ka), 0)
@@ -348,20 +370,22 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
             # fresh-covered: op debris (a flush-landed cap or collapsed fin)
 
     # Creases: plane edges a non-coplanar face stands on. The union must keep a
-    # boundary there (a roof stays split over its dividing wall).
-    keep_keys: set = set()
+    # boundary there (a roof stays split over its dividing wall). Stored as 2D
+    # segments — the union tests lie-on geometrically, since the arrangement
+    # may have split these edges at crossings.
+    keep_segs: list = []
     for e in mesh.edges:
         if not (_on_plane(e.a, origin, normal) and _on_plane(e.b, origin, normal)):
             continue
         if any(abs(QVector3D.dotProduct(f.normal().normalized(), normal)) < 0.999
                for f in e.faces):
-            keep_keys.add(frozenset((_key2(to2d(e.a)), _key2(to2d(e.b)))))
+            keep_segs.append((to2d(e.a), to2d(e.b)))
 
     result = []
     for mat_plus, regions in solid_by_side.items():
         if not regions:
             continue
-        for outer, holes in _union_outline(regions, keep_keys):
+        for outer, holes in _union_outline(regions, keep_segs):
             # CCW in (u, v) gives a +normal face; flip when the material is on
             # the +side so the face points outward (toward the empty side).
             if mat_plus:
@@ -374,7 +398,7 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
     if partitions:
         # Interior partitions have no outward side; keep the arrangement's
         # winding (orientation leaves them as-is anyway).
-        for outer, holes in _union_outline(partitions, keep_keys):
+        for outer, holes in _union_outline(partitions, keep_segs):
             result.append(
                 ([to3d(p) for p in outer],
                  [[to3d(p) for p in h] for h in holes], True)
@@ -382,7 +406,7 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
     if sheets:
         # Free sheets (flat drawing attached to the solid) — not boundary, not
         # partition; they survive the rebuild as plain faces.
-        for outer, holes in _union_outline(sheets, keep_keys):
+        for outer, holes in _union_outline(sheets, keep_segs):
             result.append(
                 ([to3d(p) for p in outer],
                  [[to3d(p) for p in h] for h in holes], False)
