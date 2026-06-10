@@ -227,14 +227,38 @@ Tras el fix de raíz se auditó el push/pull contra SketchUp (el usuario es ex-u
 
 - ⑧ **Regla de crease + dedup de caras (2026-06-10).** Auditando "¿qué falta para roca sólida?" se encontró y arregló un **crash real del flujo de planta** (levantar la 2ª de dos habitaciones que comparten muro → `IndexError`: el push reconstruía el muro compartido como duplicado idéntico y el merge de dos ciclos idénticos no tiene frontera que trazar). Fix triple: `dissolve_coplanar_region` dedupea ciclos idénticos en vez de crashear; **regla de crease** (una arista que carga una cara no-coplanar es estructural — nunca se fusiona a través de ella) en el merge fase 3 **y** en la unión del rebuild (`keep_keys`) → dos techos sobre un muro divisorio quedan **dos caras con ridge visible**, como SketchUp, no una losa flotando sobre el muro; `mesh.dedupe_faces()` como paso propio de la fase 0 del stitch. Test del flujo completo en `test_two_room_plan_raises_cleanly`.
 
-**Brechas restantes vs SketchUp (anotadas, no urgentes):** inferencia de distancia sobre caras/planos (hoy solo vértices), marcador visual del punto inferido, mensaje "Offset limited" en status bar, edición *general* dentro de grupos (dibujar/borrar adentro sigue siendo Groups v2 — hoy solo push/pull), y la diagonal de usuario que el rebuild disuelve (limitación de arriba).
+### 🎯 PRÓXIMA SESIÓN — cerrar TODO lo que falta del push/pull y del motor (definida 2026-06-10)
 
-**Para "roca sólida" de verdad (próximos del motor, en orden de valor):**
-1. **Fuzz/property bench** — el certificador real: secuencias aleatorias de draw+push sobre escenarios variados, afirmando los invariantes (hermético, outward, sin costuras, sin huérfanas) tras cada commit. Lo que encuentre, se arregla de raíz; cuando corra limpio miles de secuencias, el motor se declara roca.
-2. **Caras inclinadas en el banco** — todos los tests son axis-aligned + el prisma triangular (muros verticales). Falta cubrir pushes sobre planos inclinados (engrosar un techo a dos aguas, empujar el frontón).
-3. **Identidad/atributos a través del rebuild** — ⚠️ pre-requisito de Fase 7: el rebuild borra y re-crea caras → un material pintado se perdería. Antes de Materials hay que heredar atributos de cara vieja → región nueva en `apply_rebuild` (y en dissolve/dedupe).
-4. **Diagonal de usuario** — re-splitear caras reconstruidas por aristas de usuario sobrevivientes.
-5. **Notas arquitectónicas (no bloquean):** parity/orient/arrangement son O(F²)-ish por commit — bien a escala casita, necesitan el índice espacial antes de edificios reales (ya en roadmap); `QVector3D` es float32 → en coordenadas UTM (~500 km) la precisión cae a cm — la visión georef exige **origen local** (offset) en la Scene, decidirlo al diseñar georef.
+El usuario decidió: la próxima sesión se implementa **todo lo pendiente** de esta lista, en este orden. Estado de partida: 273 tests verdes y deterministas (`b949733`).
+
+**A. Motor "roca sólida" (lo difícil, primero):**
+
+1. **Fuzz/property bench — el certificador.** `tests/test_fuzz_engine.py`: secuencias **aleatorias con semilla fija** (reproducibles) de operaciones reales — dibujar rect sobre cara/plano aleatorio, push de cara aleatoria con distancia aleatoria (incl. negativa → clamp/through/colapso), undo/redo intercalado — sobre escenarios variados (cubo, prisma irregular, planta multi-room, sólido con grupo). Invariantes tras **cada** commit: si la malla era cerrada sigue cerrada (`is_closed`), `signed_volume > 0`, sin costuras coplanares no-crease, sin aristas huérfanas, sin caras de área ~0, sin vértices duplicados sin soldar; undo→redo reproduce el estado (fingerprint canónico). **DoD:** ≥1000 secuencias limpias en tiempo de suite razonable (marcar `@pytest.mark.slow` si hace falta un modo corto para CI). Cada falla que aparezca: minimizar → test de regresión → fix de raíz (no parches).
+2. **Banco de caras inclinadas.** Hoy todo el banco es axis-aligned + prisma triangular (muros verticales). Agregar: engrosar un techo a dos aguas (push del plano inclinado), push del frontón (gable), recess sobre cara inclinada, prisma con tapa inclinada (todas las combinaciones de orden como en `test_pushpull_orient`). **DoD:** hermético/outward/sin costuras en todos.
+3. **Identidad/atributos a través del rebuild — ⚠️ pre-requisito de Fase 7 (Materials).** El rebuild/dissolve/dedupe borra y re-crea caras → cualquier atributo (material futuro, tag BIM futuro) se perdería. Implementar un `attrs: dict` genérico en `Face` + **herencia por región**: en `apply_rebuild`, cada cara nueva hereda los attrs de la cara vieja cuyo interior contiene su punto interior (mayoría de solape en empate); `dissolve_coplanar_region`/`dedupe_faces`/`weld`/`fold` conservan attrs del sobreviviente/dominante. **DoD:** una cara con `attrs={"color": X}` sobrevive con sus attrs a: re-push de tapa (extend), notch, flush-dissolve, fold y dedupe. Sin esto, Materials (Fase 7) nace roto.
+4. **Diagonal de usuario sobre plano reconstruido.** Hoy `apply_rebuild` unioniza y disuelve una subdivisión dibujada a mano si el push toca ese plano. Fix: tras reconstruir un plano, **re-splitear** las caras nuevas por las aristas pre-existentes sobrevivientes que crucen su interior (chord-split con la maquinaria de `core/edits.py`/`topology.py`). Ojo: las aristas del *seam que el rebuild legítimamente disuelve* no deben re-splitear — distinguir aristas de usuario (existían antes del push, no son fresh) de costuras del op. **DoD:** diagonal dibujada en una pared sobrevive al re-push de la tapa; el seam de un strip apilado sí se disuelve.
+
+**B. UX restante del push/pull (rápidos, después del motor):**
+
+5. **Inferencia de distancia sobre caras/planos** (hoy solo vértices): hover sobre una cara durante el drag → proyectar el punto de hit (rayo∩plano de la cara) sobre el eje del push. Reusar `_pixel_to_ray` + plano de `pick_face_any`. Excluir las caras del sólido en formación (mismo truco: escanear con el preview revertido).
+6. **Marcador visual del punto inferido** — cuadrado verde estilo endpoint cuando `_infer_reference_distance` engancha (el viewport ya dibuja markers de snap; exponer el punto desde el tool, p.ej. `inference_marker() -> (pos, kind)` y dibujarlo en el overlay).
+7. **Mensaje "Offset limited to X m" en status bar** cuando el clamp recorta (`viewport.window().statusBar().showMessage(...)` o señal equivalente; mirar cómo main_window muestra mensajes hoy).
+
+**C. Para sesiones siguientes (NO de esta sesión, no empezar hasta cerrar A+B):**
+
+- **Fase 2 restante (selección):** doble-click = geometría conectada, triple-click = sólido completo (SelectTool hoy solo tiene click/Shift/box-select/hover). Nota: `Tool.on_double_click` ya existe (lo agregó la sesión de paridad).
+- **Fase 3 restante:** **Eraser (E)** — borrar por click y por arrastre (no existe `tools/eraser.py`; hoy solo Delete sobre la selección).
+- **Sin face culling** (render): ambos lados de cada cara con el mismo crema; SketchUp pinta front crema / back azul-gris. Con la orientación outward ya garantizada por el motor, es solo trabajo de shader/render.
+- **Groups v2:** editar dentro del grupo (doble-click entra al contexto, dibujar/borrar adentro), Outliner, Components (instancias con transform).
+- **Fase 4 restante:** Circle (C), Arc (A), Tape Measure + guías (T).
+- **Fase 6:** UI de capas sobre `core/layers.py`.
+- **Fase 7:** Materials (usa el punto A.3) + Dimensions + import/export `.dae`/`.obj`/`.stl` → v0.1.
+- **M4:** serialización `.igz` indexada por vértices (base para OBJ/glTF/IFC).
+- **Índice espacial** cuando el pick/motor duela con modelos grandes (parity/orient/arrangement son O(F²)-ish por commit — bien a escala casita, molasses en edificios reales).
+- **Origen local para georef:** `QVector3D` es float32 → en coordenadas UTM (~500 km) la precisión cae a cm; la Scene necesitará offset de origen local. Decidir al diseñar georef.
+- **Estrategia:** licencia GPL→Apache 2.0 antes del primer push público; rename de carpeta `~/wasia` → `~/ingetrazo` (usuario, fuera de sesión); CI GitHub Actions (portar de IngePresupuestos).
+
+**Brechas vs SketchUp que quedan SIN plan (aceptadas por ahora):** edición general dentro de grupos (cubierta por Groups v2 arriba).
 
 ### 🔧 Migración del motor a conectividad de vértices compartidos (swap en `main`, 2026-06-08)
 
