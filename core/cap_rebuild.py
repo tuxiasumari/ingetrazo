@@ -114,33 +114,59 @@ def _union_outline(solid_regions_xy, keep_keys: Optional[set] = None) -> list:
     # boundary edges survive in the direction that keeps the solid on the left.
     # Crease edges skip the cancellation — both directed copies survive, so the
     # trace closes one loop on each side of the crease.
-    out_adj: dict = defaultdict(list)
+    survivors: dict = defaultdict(int)
     for (ka, kb), c in dir_count.items():
         if keep_keys and frozenset((ka, kb)) in keep_keys:
-            for _ in range(c):
-                out_adj[ka].append(kb)
+            survivors[(ka, kb)] += c
             continue
         net = c - dir_count.get((kb, ka), 0)
-        for _ in range(net):
-            out_adj[ka].append(kb)
+        if net > 0:
+            survivors[(ka, kb)] += net
 
-    # Trace the surviving directed edges into closed loops.
+    # Trace the surviving directed edges into closed loops, choosing at each
+    # junction the next edge *clockwise* from the arrival direction — the same
+    # DCEL rule as ``core.arrangement._trace_faces``. An arbitrary choice can
+    # thread straight through a crease junction and pinch the two faces it
+    # should separate into one self-touching outline (the Ctrl-stack belt bug).
+    nbrs: dict = defaultdict(set)
+    for (ka, kb), c in survivors.items():
+        if c > 0:
+            nbrs[ka].add(kb)
+            nbrs[kb].add(ka)
+    order: dict = {}
+    for k, ns in nbrs.items():
+        kx, ky = coords[k]
+        order[k] = sorted(ns, key=lambda m2: math.atan2(coords[m2][1] - ky,
+                                                        coords[m2][0] - kx))
+
     loops: list = []
-    for start in list(out_adj.keys()):
-        while out_adj[start]:
-            loop = [start]
-            cur = out_adj[start].pop()
-            while cur != start:
-                loop.append(cur)
-                nxts = out_adj.get(cur)
-                if not nxts:
-                    loop = None
+    for start in sorted(survivors):
+        while survivors[start] > 0:
+            u, v = start
+            survivors[start] -= 1
+            loop = []
+            cu, cv = u, v
+            ok = True
+            while True:
+                loop.append(cu)
+                ring = order[cv]
+                idx = ring.index(cu)
+                m = len(ring)
+                w = None
+                for s in range(1, m + 1):
+                    cand = ring[(idx - s) % m]
+                    if (survivors.get((cv, cand), 0) > 0
+                            or (cv, cand) == start):
+                        w = cand
+                        break
+                if w is None or len(loop) > 100000:
+                    ok = False
                     break
-                cur = nxts.pop()
-                if len(loop) > 100000:
-                    loop = None
+                cu, cv = cv, w
+                if (cu, cv) == start:
                     break
-            if loop is not None and len(loop) >= 3:
+                survivors[(cu, cv)] -= 1
+            if ok and len(loop) >= 3:
                 loops.append([coords[k] for k in loop])
 
     # Classify: CCW loops are outer faces, CW loops are holes; nest each hole in
@@ -159,7 +185,7 @@ def _union_outline(solid_regions_xy, keep_keys: Optional[set] = None) -> list:
 
 
 def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
-                  fresh=()) -> Optional[list]:
+                  fresh=(), keep_mode: bool = False) -> Optional[list]:
     """Recompute the solid *boundary* faces of ``mesh`` on the plane
     ``(origin, normal)``.
 
@@ -209,9 +235,47 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
     # one source that is consistent mid-cleanup, because the overlapping
     # coplanar faces a naive extrude leaves cancel in crossing-parity pairs.
     # This is what makes the per-plane rebuild independent of plane order.
-    # Interior partitions are not boundary: a ray crossing one would flip
-    # parity without leaving the solid, so they are excluded.
-    tris = [t for f, t in _face_triangles(mesh).items() if not f.interior]
+    # Two exclusions keep the counts honest:
+    # - interior partitions are not boundary: a ray crossing one would flip
+    #   parity without leaving the solid;
+    # - in **keep mode** (Ctrl: the push stacks/divides, it removes nothing),
+    #   a fresh face shadowed by a counted old face on its own plane (an
+    #   inward Ctrl-stack's tube quad lying on the boundary it overlaps)
+    #   double-counts a boundary that *persists* — exclude it. Shadowed by an
+    #   interior partition, the quad is itself a partition-to-be (material on
+    #   both sides; keep removes nothing) — exclude it too. A consumed-base
+    #   push is the opposite: its sweep empties the overlapped region, and the
+    #   pair must keep cancelling (two crossings = no boundary) — the original
+    #   "cancel in pairs" doctrine — while a quad over an interior partner is
+    #   the only crossing left there and must count.
+    fresh_set = {f for f in fresh if f in mesh.faces}
+    shadowed: set = set()
+    for f in (fresh_set if keep_mode else ()):
+        if f.interior:
+            continue
+        fn = f.normal().normalized()
+        fc = f.centroid()
+        fu, fv = plane_basis(fn)
+
+        def fto2d(p, fc=fc, fu=fu, fv=fv):
+            d = p - fc
+            return (QVector3D.dotProduct(d, fu), QVector3D.dotProduct(d, fv))
+
+        for g in mesh.faces:
+            if g is f or g in fresh_set:
+                continue
+            if abs(QVector3D.dotProduct(g.normal().normalized(), fn)) < 0.999:
+                continue
+            if abs(QVector3D.dotProduct(g.centroid() - fc, fn)) > _ON_PLANE:
+                continue
+            if _point_in_polygon((0.0, 0.0), [fto2d(p) for p in g.vertices]) \
+                    and not any(_point_in_polygon((0.0, 0.0),
+                                                  [fto2d(p) for p in h])
+                                for h in g.holes):
+                shadowed.add(f)
+                break
+    tris = [t for f, t in _face_triangles(mesh).items()
+            if not f.interior and f not in shadowed]
     rng = random.Random(54321)
 
     def _proj_polys(faces):
@@ -227,11 +291,13 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
         return _point_in_polygon(pt_xy, outer_xy) and not any(
             _point_in_polygon(pt_xy, h) for h in holes_xy)
 
-    fresh_set = {f for f in fresh if f in mesh.faces}
     # A fresh face *marked interior* (the cap of an inward Ctrl-stack) is a
     # deliberate division, not a boundary declaration — it counts as existing
-    # structure instead.
-    fresh_polys = _proj_polys(f for f in fresh_set if not f.interior)
+    # structure instead. In keep mode nothing declares: Ctrl removes no
+    # material, so a fresh quad never testifies that a region emptied — the
+    # partition coverage rule below owns those spots.
+    fresh_polys = ([] if keep_mode else
+                   _proj_polys(f for f in fresh_set if not f.interior))
     old_polys = _proj_polys(f for f in mesh.faces
                             if f not in fresh_set or f.interior)
 
@@ -239,14 +305,16 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
     # unioned separately because its faces wind the other way (outward points
     # toward the empty side). Partition and sheet regions form extra groups.
     #
-    # When material reads the *same* on both sides, coverage decides:
-    # - covered by one of this push's ``fresh`` faces → the op owns the spot.
-    #   Both sides material: the fresh winding declares which side emptied
-    #   (parity can't see a void still walled in by an untrimmed neighbouring
-    #   plane). Neither side: op debris (a flush-collapsed fin) — drop.
-    # - covered by a pre-existing face → the user's structure survives: an
-    #   interior partition (Ctrl-slab, shared wall) or a free sheet (a plan's
-    #   flat floor next to a raised room).
+    # When material reads the *same* on both sides, parity is blind there (a
+    # void still walled in by an untrimmed neighbouring plane, or coincident
+    # face pairs cancelling its crossings) and coverage decides:
+    # - covered by this push's ``fresh`` faces in a *single* winding → the op
+    #   declares the region boundary; the fresh normal points to the emptied
+    #   side. Two opposite fresh windings = a collapsed coincident pair (a
+    #   flush-landed fin) — debris, drop.
+    # - otherwise covered by a pre-existing face → the user's structure
+    #   survives: an interior partition (Ctrl-slab, shared wall) when material
+    #   reads both sides, a free sheet (a plan's flat floor) when neither.
     # - covered by nothing → phantom; no face.
     solid_by_side: dict = {True: [], False: []}  # material on +side / on -side
     partitions: list = []
@@ -263,17 +331,21 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
         if mat_plus != mat_minus:
             solid_by_side[mat_plus].append((outer_xy, holes_xy))
             continue
-        plus = next((p for poly, p in fresh_polys
-                     if _poly_covers(poly, ip_xy)), None)
+        decl = {p for poly, p in fresh_polys if _poly_covers(poly, ip_xy)}
         if mat_plus:  # material on both sides
-            if plus is not None:
-                solid_by_side[not plus].append((outer_xy, holes_xy))
-            elif any(_poly_covers(poly, ip_xy) for poly, _ in old_polys):
+            if len(decl) == 1:
+                # One fresh winding covers the spot: the push declares which
+                # side emptied (parity can be blind to a void still walled in
+                # by an untrimmed neighbouring plane).
+                solid_by_side[not decl.pop()].append((outer_xy, holes_xy))
+            elif not decl and any(
+                    _poly_covers(poly, ip_xy) for poly, _ in old_polys):
                 partitions.append((outer_xy, holes_xy))
         else:         # material on neither side
-            if plus is None and any(
+            if not decl and any(
                     _poly_covers(poly, ip_xy) for poly, _ in old_polys):
                 sheets.append((outer_xy, holes_xy))
+            # fresh-covered: op debris (a flush-landed cap or collapsed fin)
 
     # Creases: plane edges a non-coplanar face stands on. The union must keep a
     # boundary there (a roof stays split over its dividing wall).
@@ -344,7 +416,7 @@ def _canon_faces(faces_as_loops) -> frozenset:
 
 
 def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
-                  fresh=()) -> bool:
+                  fresh=(), keep_mode: bool = False) -> bool:
     """Rebuild one plane of ``mesh`` in place: replace its coplanar faces with the
     deterministic solid faces from :func:`rebuild_plane`, and prune the edges left
     interior to the plane (a dissolved seam) that now border nothing. Returns
@@ -359,7 +431,7 @@ def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
     The caller snapshots for undo (the push wraps the whole mutation), so this
     keeps no inverse of its own."""
     normal = normal.normalized()
-    rebuilt = rebuild_plane(mesh, origin, normal, fresh)
+    rebuilt = rebuild_plane(mesh, origin, normal, fresh, keep_mode)
     if rebuilt is None:
         return False
     old = [f for f in mesh.faces if _coplanar_on(f, origin, normal)]

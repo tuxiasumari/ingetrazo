@@ -116,6 +116,51 @@ def test_draw_on_shared_plane_does_not_flip_the_other_solid():
     assert orient_outward(scene.mesh) == []
 
 
+# ---- inward Ctrl-stack: belt-split boundary, no coincident debris ------------
+
+def test_ctrl_inward_stack_splits_boundary_at_belt():
+    # Ctrl-push a full wall inward: SketchUp divides the surrounding faces at
+    # the belt and keeps the moved copy as an interior division. The naive
+    # build's tube quads lie *on* the boundary planes; they used to survive as
+    # opposite-winding coincident pairs (or pinch the host into a self-touching
+    # outline once unioned). Now: 11 clean faces — 4 boundary planes split in
+    # two at the belt, both wall planes, and the interior cap.
+    scene, hist, _user = _cube_scene()
+    wall = next(fc for fc in scene.mesh.faces
+                if all(abs(v.y()) < 1e-9 for v in fc.vertices))
+    n = wall.normal().normalized()
+    _push(scene, hist, wall, -0.5 if n.y() < 0 else 0.5, keep_base=True)
+    m = scene.mesh
+    assert len(m.faces) == 11
+    assert is_closed(m)
+    assert sum(1 for f in m.faces if f.interior) == 1
+    for fc in m.faces:  # no pinched (self-touching) outlines
+        ks = [(round(v.x(), 6), round(v.y(), 6), round(v.z(), 6))
+              for v in fc.vertices]
+        assert len(ks) == len(set(ks))
+    assert orient_outward(m) == []
+
+
+def test_two_ctrl_stacks_stay_closed():
+    # Fuzz cube seed 9: Ctrl-out on one wall, then Ctrl-in on a neighbouring
+    # wall whose tube quad lands on the first stack's kept partition. The
+    # parity exclusions (keep mode) must classify both planes right.
+    scene, hist, _user = _cube_scene()
+    front = next(fc for fc in scene.mesh.faces
+                 if all(abs(v.y()) < 1e-9 for v in fc.vertices))
+    n = front.normal().normalized()
+    _push(scene, hist, front, 2.2 if n.y() < 0 else -2.2, keep_base=True)
+    left = next(fc for fc in scene.mesh.faces
+                if all(abs(v.x()) < 1e-9 for v in fc.vertices)
+                and -0.1 < fc.centroid().y() < 4.1
+                and len(fc.vertices) == 4 and fc.centroid().y() > 1)
+    n = left.normal().normalized()
+    _push(scene, hist, left, -1.6 if n.x() < 0 else 1.6, keep_base=True)
+    m = scene.mesh
+    assert is_closed(m)
+    assert orient_outward(m) == []
+
+
 # ---- interior partitions survive later pushes (fuzz: cube seed 26) -----------
 
 def test_partition_survives_push_on_another_plane():

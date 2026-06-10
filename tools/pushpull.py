@@ -614,12 +614,14 @@ class PushPullTool(Tool):
             for i in range(count)
         ]
         # Ctrl ("push/pull a copy") forces the free-extrusion semantics: the
-        # base face stays in place as a slab division, so the build keeps it,
-        # punches no through-hole and dissolves no seams — the stacked strips
-        # and their belt of edges are the point, exactly like SketchUp.
-        # (Known gap: an *inward* Ctrl-stack leaves strips coincident with the
-        # boundary planes uncleaned; enabling the rebuild here needs belt-safe
-        # union rules first — see the fuzz bench backlog.)
+        # base face stays in place as a slab division and no through-hole is
+        # punched — the stacked segment and its belt of edges are the point,
+        # exactly like SketchUp. The solid rebuild still runs: the kept base /
+        # inward cap are interior partitions the rebuild preserves, the belt
+        # survives as crease boundaries (``keep_keys``), and an inward stack's
+        # tube quads dissolve into the boundary faces they overlap instead of
+        # festering as opposite-winding coincident pairs that corrupt later
+        # parity queries.
         attached_any = all(kind != "free" for kind, _ in kinds)
         attached = attached_any and not self._keep_base
         through = self._find_through_face(face, d, faces) if attached else None
@@ -634,6 +636,16 @@ class PushPullTool(Tool):
         for cmd in commands:
             cmd.do(scene)
         new_faces = set(scene.mesh.faces) - before
+        if self._keep_base and attached_any and d < 0:
+            # The Ctrl-stack grows *into* the solid: its cap is a deliberate
+            # interior division (the inward counterpart of the kept base), not
+            # a boundary declaration — mark it so the rebuild preserves it.
+            for f in new_faces:
+                fn = f.normal().normalized()
+                if (abs(QVector3D.dotProduct(fn, normal)) > 0.999
+                        and abs(QVector3D.dotProduct(
+                            f.centroid() - top[0], normal)) < 1e-4):
+                    f.interior = True
         seed = list(base) + list(top)
         for hb, ht in zip(base_holes, top_holes):
             seed += list(hb) + list(ht)
@@ -642,11 +654,12 @@ class PushPullTool(Tool):
         # deterministic per-plane rebuild below, so the winding-tolerant coplanar
         # merge (phase 3) stays off. On raw/open geometry (a flat sheet) there is
         # no "outside" to classify against, so the merge still applies there.
-        solid = attached and was_solid
+        solid = attached_any and was_solid
         run_stitch(scene.mesh, seedkeys, new_faces,
                    coplanar_merge=not solid and not self._keep_base)
         if solid:
-            self._rebuild_planes_fixpoint(scene.mesh, set(new_faces), seedkeys)
+            self._rebuild_planes_fixpoint(scene.mesh, set(new_faces), seedkeys,
+                                          keep_mode=self._keep_base)
         # Give any closed solid a consistent outward orientation — every face's
         # normal pointing out. The extrude can otherwise commit a closed solid
         # wound inconsistently (a flipped cap, or the base of a first flat→solid
@@ -655,7 +668,8 @@ class PushPullTool(Tool):
         orient_outward(scene.mesh)
 
     @staticmethod
-    def _rebuild_planes_fixpoint(mesh, fresh: set, seedkeys: set) -> None:
+    def _rebuild_planes_fixpoint(mesh, fresh: set, seedkeys: set,
+                                 keep_mode: bool = False) -> None:
         """Deterministic root-fix (path C): recompute each touched plane's
         faces from its edges — the planar arrangement finds every region,
         winding-classification keeps the ones inside the solid and drops
@@ -686,7 +700,7 @@ class PushPullTool(Tool):
             for key in sorted(planes):
                 origin, plane_n = planes[key]
                 before_faces = set(mesh.faces)
-                if apply_rebuild(mesh, origin, plane_n, fresh):
+                if apply_rebuild(mesh, origin, plane_n, fresh, keep_mode):
                     changed = True
                     fresh |= set(mesh.faces) - before_faces
             if not changed:
