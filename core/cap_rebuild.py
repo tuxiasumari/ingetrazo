@@ -158,20 +158,26 @@ def _union_outline(solid_regions_xy, keep_keys: Optional[set] = None) -> list:
     return result
 
 
-def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D) -> Optional[list]:
+def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
+                  fresh=()) -> Optional[list]:
     """Recompute the solid *boundary* faces of ``mesh`` on the plane
     ``(origin, normal)``.
 
     A region of the plane carries a face exactly when material sits on **one**
     side of it: none → it is outside the solid (a phantom); both → it is
-    interior (e.g. the mouth ring where a pushed-out pane meets its wall — a
-    face there would be an internal partition, and a window hole must survive).
-    Material presence per side is the winding of the region's interior point
-    against that side's wall borders (:func:`_wall_boundary_sides`).
+    interior. A both-sides region is dropped when fresh (the mouth ring where
+    a pushed-out pane meets its wall — facing it would swallow a window hole),
+    **kept as a partition** when an existing interior face covers it (the slab
+    a Ctrl-push keeps, a wall two rooms share — deliberate structure), and
+    **declared boundary by the push** when one of this push's ``fresh`` faces
+    covers it: parity can't see a void still walled in by an untrimmed
+    neighbouring plane, but the naive build's deterministic winding already
+    says which side emptied (the fresh normal points to the empty side) — that
+    is what keeps the per-plane rebuild order-free next to partitions.
 
-    Returns ``[(outer_loop, [hole_loops]), …]`` with every loop a list of 3D
-    ``QVector3D`` on the plane, *wound outward* (toward the empty side), ready
-    for ``AddFaceCommand`` — or ``None`` when the plane carries too little to
+    Returns ``[(outer_loop, [hole_loops], is_partition), …]`` with every loop a
+    list of 3D ``QVector3D`` on the plane, boundary loops *wound outward*
+    (toward the empty side) — or ``None`` when the plane carries too little to
     face (fewer than three usable edges). Pure: it reads the mesh, it does not
     mutate it.
     """
@@ -203,23 +209,71 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D) -> Optional[list]:
     # one source that is consistent mid-cleanup, because the overlapping
     # coplanar faces a naive extrude leaves cancel in crossing-parity pairs.
     # This is what makes the per-plane rebuild independent of plane order.
-    tris = list(_face_triangles(mesh).values())
+    # Interior partitions are not boundary: a ray crossing one would flip
+    # parity without leaving the solid, so they are excluded.
+    tris = [t for f, t in _face_triangles(mesh).items() if not f.interior]
     rng = random.Random(54321)
+
+    def _proj_polys(faces):
+        return [
+            (([to2d(p) for p in f.vertices],
+              [[to2d(p) for p in h] for h in f.holes]),
+             QVector3D.dotProduct(f.normal().normalized(), normal) > 0)
+            for f in faces if _coplanar_on(f, origin, normal)
+        ]
+
+    def _poly_covers(poly, pt_xy) -> bool:
+        outer_xy, holes_xy = poly
+        return _point_in_polygon(pt_xy, outer_xy) and not any(
+            _point_in_polygon(pt_xy, h) for h in holes_xy)
+
+    fresh_set = {f for f in fresh if f in mesh.faces}
+    # A fresh face *marked interior* (the cap of an inward Ctrl-stack) is a
+    # deliberate division, not a boundary declaration — it counts as existing
+    # structure instead.
+    fresh_polys = _proj_polys(f for f in fresh_set if not f.interior)
+    old_polys = _proj_polys(f for f in mesh.faces
+                            if f not in fresh_set or f.interior)
 
     # Group boundary regions by which side holds the material — each group is
     # unioned separately because its faces wind the other way (outward points
-    # toward the empty side).
+    # toward the empty side). Partition and sheet regions form extra groups.
+    #
+    # When material reads the *same* on both sides, coverage decides:
+    # - covered by one of this push's ``fresh`` faces → the op owns the spot.
+    #   Both sides material: the fresh winding declares which side emptied
+    #   (parity can't see a void still walled in by an untrimmed neighbouring
+    #   plane). Neither side: op debris (a flush-collapsed fin) — drop.
+    # - covered by a pre-existing face → the user's structure survives: an
+    #   interior partition (Ctrl-slab, shared wall) or a free sheet (a plan's
+    #   flat floor next to a raised room).
+    # - covered by nothing → phantom; no face.
     solid_by_side: dict = {True: [], False: []}  # material on +side / on -side
+    partitions: list = []
+    sheets: list = []
     for outer, holes in regions_3d:
         outer_xy = [to2d(p) for p in outer]
         holes_xy = [[to2d(p) for p in h] for h in holes]
-        ip = to3d(_region_test_point(outer_xy, holes_xy))
+        ip_xy = _region_test_point(outer_xy, holes_xy)
+        ip = to3d(ip_xy)
         mat_plus = ray_parity_outside(
             ip + normal * _SAMPLE_OFF, normal, tris, rng) is False
         mat_minus = ray_parity_outside(
             ip - normal * _SAMPLE_OFF, -normal, tris, rng) is False
         if mat_plus != mat_minus:
             solid_by_side[mat_plus].append((outer_xy, holes_xy))
+            continue
+        plus = next((p for poly, p in fresh_polys
+                     if _poly_covers(poly, ip_xy)), None)
+        if mat_plus:  # material on both sides
+            if plus is not None:
+                solid_by_side[not plus].append((outer_xy, holes_xy))
+            elif any(_poly_covers(poly, ip_xy) for poly, _ in old_polys):
+                partitions.append((outer_xy, holes_xy))
+        else:         # material on neither side
+            if plus is None and any(
+                    _poly_covers(poly, ip_xy) for poly, _ in old_polys):
+                sheets.append((outer_xy, holes_xy))
 
     # Creases: plane edges a non-coplanar face stands on. The union must keep a
     # boundary there (a roof stays split over its dividing wall).
@@ -242,7 +296,24 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D) -> Optional[list]:
                 outer = list(reversed(outer))
                 holes = [list(reversed(h)) for h in holes]
             result.append(
-                ([to3d(p) for p in outer], [[to3d(p) for p in h] for h in holes])
+                ([to3d(p) for p in outer],
+                 [[to3d(p) for p in h] for h in holes], False)
+            )
+    if partitions:
+        # Interior partitions have no outward side; keep the arrangement's
+        # winding (orientation leaves them as-is anyway).
+        for outer, holes in _union_outline(partitions, keep_keys):
+            result.append(
+                ([to3d(p) for p in outer],
+                 [[to3d(p) for p in h] for h in holes], True)
+            )
+    if sheets:
+        # Free sheets (flat drawing attached to the solid) — not boundary, not
+        # partition; they survive the rebuild as plain faces.
+        for outer, holes in _union_outline(sheets, keep_keys):
+            result.append(
+                ([to3d(p) for p in outer],
+                 [[to3d(p) for p in h] for h in holes], False)
             )
     return result
 
@@ -264,36 +335,43 @@ def _canon_loop(loop) -> tuple:
 
 
 def _canon_faces(faces_as_loops) -> frozenset:
-    """Order-free fingerprint of a set of faces given as ``(outer, holes)``."""
+    """Order-free fingerprint of a set of faces given as ``(outer, holes,
+    is_partition)``."""
     return frozenset(
-        (_canon_loop(outer), frozenset(_canon_loop(h) for h in holes))
-        for outer, holes in faces_as_loops
+        (_canon_loop(outer), frozenset(_canon_loop(h) for h in holes), interior)
+        for outer, holes, interior in faces_as_loops
     )
 
 
-def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D) -> bool:
+def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
+                  fresh=()) -> bool:
     """Rebuild one plane of ``mesh`` in place: replace its coplanar faces with the
     deterministic solid faces from :func:`rebuild_plane`, and prune the edges left
     interior to the plane (a dissolved seam) that now border nothing. Returns
     whether anything changed — **False when the plane already matches** the
     rebuilt result, so callers can iterate rebuilds to a fixpoint and know it
-    terminates. No-op when the rebuild yields nothing to face.
+    terminates. No-op when the rebuild can't trace the plane (``None``); an
+    *empty* rebuild is a real answer — every region is phantom or interior
+    (a zero-thickness fin left by a flush collapse) — and removes the plane's
+    faces. ``fresh`` (this push's new faces) lets the rebuild resolve regions
+    a partition used to cover (see :func:`rebuild_plane`).
 
     The caller snapshots for undo (the push wraps the whole mutation), so this
     keeps no inverse of its own."""
     normal = normal.normalized()
-    rebuilt = rebuild_plane(mesh, origin, normal)
-    if not rebuilt:
+    rebuilt = rebuild_plane(mesh, origin, normal, fresh)
+    if rebuilt is None:
         return False
     old = [f for f in mesh.faces if _coplanar_on(f, origin, normal)]
     if _canon_faces(rebuilt) == _canon_faces(
-        [(list(f.vertices), [list(h) for h in f.holes]) for f in old]
+        [(list(f.vertices), [list(h) for h in f.holes], f.interior)
+         for f in old]
     ):
         return False  # plane already in its rebuilt form — stable
     for f in old:
         mesh.remove_face(f)
-    for outer, holes in rebuilt:
-        mesh.add_face(outer, holes or None)
+    for outer, holes, interior in rebuilt:
+        mesh.add_face(outer, holes or None).interior = interior
     # Drop edges that lie fully on the plane and ended up facing nothing — the
     # interior seams the union dissolved. Perimeter edges still border a wall, so
     # they keep a face and survive. Vertices those edges leave behind with no

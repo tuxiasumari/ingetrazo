@@ -1,6 +1,6 @@
 # IngeTrazo — modelador 3D libre
 
-**Autor:** Marco Sumari Tellez · **Licencia:** GPL-3.0-or-later · **Repo:** `/home/sumaritux/wasia/` (directorio en disco aún se llama `wasia/`; el rename de carpeta queda para que lo haga el usuario fuera de la sesión — afecta venv. GitHub destino tentativo: `github.com/tuxiasumari/ingetrazo`)
+**Autor:** Marco Sumari Tellez · **Licencia:** GPL-3.0-or-later · **Repo:** `/home/sumaritux/ingetrazo/` (rename de carpeta `wasia/` → `ingetrazo/` hecho, venv recreado y funcional. GitHub destino tentativo: `github.com/tuxiasumari/ingetrazo`)
 
 > **Nota histórica:** este proyecto se llamó **Wasia** (quechua *wasi* = "casa") entre 2026-05-21 y 2026-05-23. Renombrado a **IngeTrazo** el 2026-05-23 para entrar al ecosistema visual de IngePresupuestos. Ver sesión 17 abajo. Extensión nativa pasó de `.wasia` a `.igz`; módulo `formats/wasia.py` a `formats/igz.py`.
 
@@ -42,7 +42,7 @@ El 2D separado quedó en el pasado; por eso el referente es SketchUp y no AutoCA
 
 - ✅ **Rename (resuelto 2026-05-23).** Wasia → **IngeTrazo**. Verbo de oficio civil ("trazar" como acción del usuario), ritmo limpio en tres sílabas, encaja en el patrón ecosistema `Inge[X]`. Tagline planeado: *"Trazá. Metrá. Presupuestá."* Tradeoff aceptado: se pierde la identidad cultural quechua de "Wasia" a cambio de cohesión de marca con IngePresupuestos.
 - ⏳ **Licencia.** GPL-3.0 actual atrapa a IngePresupuestos (closed-source) si en el futuro se quisiera embeber IngeTrazo como librería. Como nunca se distribuyó a nadie bajo GPL (sigue local en la laptop), el cambio es libre. Candidato fuerte: **Apache 2.0** — permite embeber sin acrobacia legal ni CLAs, sigue siendo OSS legítimo, suma cláusula de patentes. Decidir antes del primer push público.
-- ⏳ **Rename de directorio en disco.** `/home/sumaritux/wasia/` → `/home/sumaritux/ingetrazo/`. Pendiente porque rompe el venv (paths hardcodeados); el usuario lo hace fuera de la sesión cuando le quede cómodo recrear el venv. Pasos sugeridos: `mv ~/wasia ~/ingetrazo && cd ~/ingetrazo && rm -rf venv && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt`.
+- ✅ **Rename de directorio en disco (hecho).** `/home/sumaritux/wasia/` → `/home/sumaritux/ingetrazo/`, venv recreado y la suite corre.
 
 ---
 
@@ -233,7 +233,7 @@ El usuario decidió: la próxima sesión se implementa **todo lo pendiente** de 
 
 **A. Motor "roca sólida" (lo difícil, primero):**
 
-1. **Fuzz/property bench — el certificador.** `tests/test_fuzz_engine.py`: secuencias **aleatorias con semilla fija** (reproducibles) de operaciones reales — dibujar rect sobre cara/plano aleatorio, push de cara aleatoria con distancia aleatoria (incl. negativa → clamp/through/colapso), undo/redo intercalado — sobre escenarios variados (cubo, prisma irregular, planta multi-room, sólido con grupo). Invariantes tras **cada** commit: si la malla era cerrada sigue cerrada (`is_closed`), `signed_volume > 0`, sin costuras coplanares no-crease, sin aristas huérfanas, sin caras de área ~0, sin vértices duplicados sin soldar; undo→redo reproduce el estado (fingerprint canónico). **DoD:** ≥1000 secuencias limpias en tiempo de suite razonable (marcar `@pytest.mark.slow` si hace falta un modo corto para CI). Cada falla que aparezca: minimizar → test de regresión → fix de raíz (no parches).
+1. 🟡 **Fuzz/property bench — el certificador.** *(construido y operando 2026-06-10 tarde — ver sección "🧪 Fuzz bench" abajo; 815/1000 secuencias limpias, 185 congeladas como `xfail` por seed)* `tests/test_fuzz_engine.py`: secuencias **aleatorias con semilla fija** (reproducibles) de operaciones reales — dibujar rect sobre cara/plano aleatorio, push de cara aleatoria con distancia aleatoria (incl. negativa → clamp/through/colapso), undo/redo intercalado — sobre escenarios variados (cubo, prisma irregular, planta multi-room, sólido con grupo). Invariantes tras **cada** commit: si la malla era cerrada sigue cerrada (`is_closed`), `signed_volume > 0`, sin costuras coplanares no-crease, sin aristas huérfanas, sin caras de área ~0, sin vértices duplicados sin soldar; undo→redo reproduce el estado (fingerprint canónico). **DoD:** ≥1000 secuencias limpias en tiempo de suite razonable (marcar `@pytest.mark.slow` si hace falta un modo corto para CI). Cada falla que aparezca: minimizar → test de regresión → fix de raíz (no parches).
 2. **Banco de caras inclinadas.** Hoy todo el banco es axis-aligned + prisma triangular (muros verticales). Agregar: engrosar un techo a dos aguas (push del plano inclinado), push del frontón (gable), recess sobre cara inclinada, prisma con tapa inclinada (todas las combinaciones de orden como en `test_pushpull_orient`). **DoD:** hermético/outward/sin costuras en todos.
 3. **Identidad/atributos a través del rebuild — ⚠️ pre-requisito de Fase 7 (Materials).** El rebuild/dissolve/dedupe borra y re-crea caras → cualquier atributo (material futuro, tag BIM futuro) se perdería. Implementar un `attrs: dict` genérico en `Face` + **herencia por región**: en `apply_rebuild`, cada cara nueva hereda los attrs de la cara vieja cuyo interior contiene su punto interior (mayoría de solape en empate); `dissolve_coplanar_region`/`dedupe_faces`/`weld`/`fold` conservan attrs del sobreviviente/dominante. **DoD:** una cara con `attrs={"color": X}` sobrevive con sus attrs a: re-push de tapa (extend), notch, flush-dissolve, fold y dedupe. Sin esto, Materials (Fase 7) nace roto.
 4. **Diagonal de usuario sobre plano reconstruido.** Hoy `apply_rebuild` unioniza y disuelve una subdivisión dibujada a mano si el push toca ese plano. Fix: tras reconstruir un plano, **re-splitear** las caras nuevas por las aristas pre-existentes sobrevivientes que crucen su interior (chord-split con la maquinaria de `core/edits.py`/`topology.py`). Ojo: las aristas del *seam que el rebuild legítimamente disuelve* no deben re-splitear — distinguir aristas de usuario (existían antes del push, no son fresh) de costuras del op. **DoD:** diagonal dibujada en una pared sobrevive al re-push de la tapa; el seam de un strip apilado sí se disuelve.
@@ -259,6 +259,23 @@ El usuario decidió: la próxima sesión se implementa **todo lo pendiente** de 
 - **Estrategia:** licencia GPL→Apache 2.0 antes del primer push público; rename de carpeta `~/wasia` → `~/ingetrazo` (usuario, fuera de sesión); CI GitHub Actions (portar de IngePresupuestos).
 
 **Brechas vs SketchUp que quedan SIN plan (aceptadas por ahora):** edición general dentro de grupos (cubierta por Groups v2 arriba).
+
+### 🧪 Fuzz bench del motor + fixes de raíz que destapó (sesión 2026-06-10, tarde)
+
+**A.1 construido y operando** (`tests/test_fuzz_engine.py`): 1000 secuencias seeded reproducibles (4 escenarios × 250 seeds; sweep rápido = 200 en cada corrida, resto `@pytest.mark.slow` — deseleccionar con `-m "not slow"`) de dibujar-rect / push (±, −50, Ctrl) / undo-redo intercalado, con invariantes tras cada commit: cerrada→cerrada-o-plana, volumen+ y orientación consistente (`orient_outward(m)==[]`), costuras coplanares solo sobre trazos del usuario o divisiones Ctrl, sin huérfanas / área-0 / vértices sin soldar, undo→redo reproduce el fingerprint canónico. **Estado: 815/1000 limpias; las 185 que el motor aún no sobrevive están congeladas como `xfail` por seed en `KNOWN_BAD`** (regenerar la lista: `python -m tests.test_fuzz_engine`; un seed arreglado empieza a pasar y se poda de la lista). Suite completa: **1096 verdes + 185 xfail en ~2 min**. Repro de cualquier seed: `tests.test_fuzz_engine.run_sequence(escenario, seed)`.
+
+**Fixes de raíz que el bench destapó** (regresiones nombradas en `tests/test_fuzz_regressions.py` y `tests/test_orient.py`):
+
+1. **`Face.interior` — particiones interiores como concepto del motor** (`core/mesh.py`, `core/orient.py`). El ray-casting de paridad contaba las particiones (losa de Ctrl-push, muro que comparten dos cuartos) como cruces de frontera → corrompía orientación y clasificación en cualquier malla con divisiones, y `orient_outward` flipeaba la losa en *cada* llamada (no idempotente). Ahora las detecta por **peeling iterativo** (clasifica contra el set frontera, excluye las que leen interior, reclasifica a punto fijo), las marca, y todo test volumétrico las excluye (`ray_parity_outside` del rebuild, `signed_volume`). Marca también en mallas **abiertas** (planta mixta sólido+hoja); el flip solo corre en cerradas; gate barato `_all_coplanar` para no pagar paridad en dibujos planos.
+2. **`rebuild_plane` con reglas de cobertura** (`core/cap_rebuild.py`). Región con material igual a ambos lados → decide la cobertura: **cara fresca** del push (su winding determinista declara qué lado se vació — resuelve la dependencia circular entre planos cuando un quad fresco coincide con la parte muerta de una partición), **cara existente** (estructura del usuario: la partición o la hoja plana se re-emite — antes el rebuild se comía el muro divisorio y los pisos planos de una planta), o **nada** (fantasma → se descarta). Devuelve `(outer, holes, is_partition)`.
+3. **`apply_rebuild` acepta rebuild vacío**: `[]` es respuesta real (todas las regiones fantasma/interior — p.ej. la aleta de espesor cero que deja un colapso flush) y **borra** las caras del plano; antes `if not rebuilt` lo trataba como no-op y la aleta sobrevivía abierta.
+4. **Push de cara con huecos**: `_classify_base` y `_cap_positions` ignoraban los loops de hueco → el prism-translate trasladaba el muro dejando el rim del hueco (y el panel de adentro) clavados en el plano viejo: cara-con-hueco no-plana, corrupta. Ahora clasifican y mueven outer + rims (`PushPullTool._cap_loop_positions`).
+5. **Colapso lateral flush**: el camino prism-translate corre el **mismo fixpoint de rebuild** que el extrude (extraído a `_rebuild_planes_fixpoint`, compartido) — empujar el flanco de un bump a ras del flanco opuesto disuelve el bump completo (cubo prístino 6 caras / 12 aristas / 8 vértices). Antes la limpieza colgaba de `face in mesh.faces`, falso justo cuando el weld consumía la cara empujada.
+6. **Clamp lateral del push hacia adentro** (`_compute_inward_limit`): además del blocker paralelo, (a) **salida inmediata** — pared vecina que "se abre" respecto del push (`dot(−n, normal vecina) > 0`) → límite 0: la pared larga del prisma triangular no puede entrar sin subtracción booleana, el push queda no-op; (b) **salida distante** — rayos desde muestras apenas interiores del loop, primer cruce con cara frontera no-paralela, menos 1 mm (el contacto lateral es de filo, no de cara — aterrizar exacto degenera). Mata la clase "sólido invertido con volumen negativo" (era el peor síntoma: corrupción silenciosa).
+7. **Push mínimo = resolución del weld** (`_MIN_EXTRUDE = 2e-4` en `tools/pushpull.py`): una extrusión bajo la tolerancia de soldado (1e-4) crasheaba `add_edge` ("degenerate edge"); ahora es no-op.
+8. **Heal del draw gateado a planas** (`core/topology.py::heal_overlapping_faces`): `orient_coplanar_faces` solo corre en mallas planas — en 3D un mismo plano lleva legítimamente outwards opuestos (dos sólidos espalda con espalda) y el pase volteaba muros hacia adentro. En 3D, el winding del sub-face recién dibujado lo decide `orient_outward` al final del heal.
+
+**Las 185 restantes (clases, todas reproducibles por seed):** (a) estados sembrados por **Ctrl-push hacia adentro** — deposita strips coincidentes con los planos de frontera y saltea el cleanup; habilitar el rebuild para keep_base necesita reglas de unión belt-safe (el intento directo empeoró el cuadro y fue revertido); (b) **−50 / overflow con through parcial** (cube 23/33: el sub-rect proyecta parcialmente fuera de la cara lejana); (c) **grietas multi-step** en planta/grupo (plan 7+, group 1+) — combinaciones de (a)/(b) más profundas. El criterio sigue: minimizar seed → regresión nombrada → fix de raíz, nunca parche.
 
 ### 🔧 Migración del motor a conectividad de vértices compartidos (swap en `main`, 2026-06-08)
 
@@ -304,12 +321,12 @@ Orden sugerido alineado con la visión (freeform + BIM tagging + 2D que emerge d
 **Sin** numpy, ifcopenshell, trimesh, manifold3d, pyassimp aún — esos llegan cuando se necesiten (probablemente IFC el primero).
 
 ```bash
-cd /home/sumaritux/wasia    # directorio en disco aún se llama wasia/; rename pendiente
+cd /home/sumaritux/ingetrazo
 source venv/bin/activate
 python main.py
 ```
 
-Python 3.14.4 · venv local en `/home/sumaritux/wasia/venv/` (gitignored).
+Python 3.14.4 · venv local en `/home/sumaritux/ingetrazo/venv/` (gitignored).
 
 ---
 
@@ -412,7 +429,7 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 
 ## Memorias de Claude relacionadas
 
-**De este proyecto** (`~/.claude/projects/-home-sumaritux-wasia/memory/` — directorio aún con el nombre viejo "wasia"):
+**De este proyecto** (`~/.claude/projects/-home-sumaritux-ingetrazo/memory/`):
 
 - `project_face_plane_inference_done.md` — convención para tools nuevos: leer `tool.work_plane` y usar `_plane_axes(normal)` en vez de hardcodear XY.
 

@@ -65,7 +65,7 @@ def _push(scene, face, dist, keep_base=False):
     tool._anchor = face.centroid()
     tool._normal = face.normal()
     tool._attached, tool._prism_cap = tool._classify_base(scene)
-    tool._cap_positions = [QVector3D(v) for v in face.vertices]
+    tool._cap_positions = tool._cap_loop_positions(face)
     tool._keep_base = keep_base
     tool._commit(vp)
     return vp
@@ -191,7 +191,7 @@ def test_vcb_negative_value_reverses_direction():
     tool._anchor = block.centroid()
     tool._normal = block.normal()
     tool._attached, tool._prism_cap = tool._classify_base(scene)
-    tool._cap_positions = [QVector3D(v) for v in block.vertices]
+    tool._cap_positions = tool._cap_loop_positions(block)
     assert tool.on_value(vp, -1.0) is True     # typed "-1" → carve down instead
     assert any(
         len(f.vertices) == 4 and all(abs(v.z() - 2.0) < 1e-9 for v in f.vertices)
@@ -235,7 +235,7 @@ def _locked_tool(scene, face, dist):
     tool._anchor = face.centroid()
     tool._normal = face.normal()
     tool._attached, tool._prism_cap = tool._classify_base(scene)
-    tool._cap_positions = [QVector3D(v) for v in face.vertices]
+    tool._cap_positions = tool._cap_loop_positions(face)
     tool._compute_inward_limit(scene)
     tool.extrusion = dist
     tool._clamp_extrusion()
@@ -376,7 +376,7 @@ def test_hovering_vertex_infers_distance():
     tool._anchor = top.centroid()
     tool._normal = top.normal()
     tool._attached, tool._prism_cap = tool._classify_base(scene)
-    tool._cap_positions = [QVector3D(v) for v in top.vertices]
+    tool._cap_positions = tool._cap_loop_positions(top)
 
     # Cursor over the reference block's top corner (6, 0, 5) → pixel (60, -50).
     ctx = ToolContext(viewport=vp, world=QVector3D(), screen=QPointF(60.0, -50.0),
@@ -481,7 +481,7 @@ def _push_group(scene, group, face, dist):
     tool._anchor = face.centroid()
     tool._normal = face.normal()
     tool._attached, tool._prism_cap = tool._classify_base(target)
-    tool._cap_positions = [QVector3D(v) for v in face.vertices]
+    tool._cap_positions = tool._cap_loop_positions(face)
     tool._compute_inward_limit(target)
     tool._commit(vp)
     return vp
@@ -528,7 +528,7 @@ def test_group_recess_and_clamp_use_group_geometry():
     tool._anchor = top.centroid()
     tool._normal = top.normal()
     tool._attached, tool._prism_cap = tool._classify_base(target)
-    tool._cap_positions = [QVector3D(v) for v in top.vertices]
+    tool._cap_positions = tool._cap_loop_positions(top)
     tool._compute_inward_limit(target)
     assert tool._limit_in is not None and abs(tool._limit_in - 2.0) < 1e-6
     tool.extrusion = -99.0

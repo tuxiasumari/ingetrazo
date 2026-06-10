@@ -118,13 +118,20 @@ class Face:
     rendering, bounds and ``.igz`` save consume a ``mesh.Face`` unchanged (M1).
     """
 
-    __slots__ = ("loop", "hole_loops")
+    __slots__ = ("loop", "hole_loops", "interior")
 
     def __init__(
         self, loop: list[Vertex], hole_loops: Optional[list[list[Vertex]]] = None
     ) -> None:
         self.loop = list(loop)
         self.hole_loops = [list(h) for h in hole_loops] if hole_loops else []
+        # Interior partition: a face *inside* a solid (the slab a Ctrl-push
+        # keeps, a wall two rooms share) rather than on its boundary. Marked by
+        # ``core.orient.orient_outward`` (and the plane rebuild) so volumetric
+        # queries — parity ray-casting, signed volume — skip it: an interior
+        # face is not part of the boundary, and counting a ray crossing
+        # through it would corrupt every inside/outside answer.
+        self.interior = False
 
     # ---- Legacy-compatible read interface (positions) -----------------------
     @property

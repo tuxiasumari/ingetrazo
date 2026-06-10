@@ -49,7 +49,7 @@ from core.history import (
     translate_points,
 )
 from core.arrangement import _interior_point, _point_in_polygon, plane_basis
-from core.orient import orient_outward
+from core.orient import _ray_triangle, orient_outward
 from core.cap_rebuild import apply_rebuild, crack_planes, plane_key, seam_planes
 from core.topology import (
     _key,
@@ -126,6 +126,12 @@ def _swept_by_push(neighbour: Face, push_normal: QVector3D) -> bool:
         if e.length() > 1e-9 and abs(QVector3D.dotProduct(e.normalized(), n)) > 0.999:
             return True
     return False
+
+
+# The smallest extrusion that still moves geometry: anything below the mesh's
+# weld resolution (1e-4, ~0.1 mm) would weld the top loop onto the base loop
+# vertex-by-vertex and degenerate the wall quads. Treated as a no-op push.
+_MIN_EXTRUDE = 2e-4
 
 
 class PushPullTool(Tool):
@@ -230,7 +236,7 @@ class PushPullTool(Tool):
             self._anchor = face.centroid()
             self._normal = face.normal()
             self._attached, self._prism_cap = self._classify_base(target)
-            self._cap_positions = [QVector3D(v) for v in face.vertices]
+            self._cap_positions = self._cap_loop_positions(face)
             self._compute_inward_limit(target)
             self._preview_snapshot = None
             # The live preview takes over from the hover shade now.
@@ -239,7 +245,7 @@ class PushPullTool(Tool):
             return
 
         # Already dragging — second click commits.
-        if abs(self.extrusion) < 1e-6:
+        if abs(self.extrusion) < _MIN_EXTRUDE:
             # No-op extrusion; just stay in drag mode so the user can keep going.
             return
         self._commit(viewport)
@@ -266,10 +272,10 @@ class PushPullTool(Tool):
             self._anchor = face.centroid()
             self._normal = face.normal()
             self._attached, self._prism_cap = self._classify_base(target)
-            self._cap_positions = [QVector3D(v) for v in face.vertices]
+            self._cap_positions = self._cap_loop_positions(face)
             self._compute_inward_limit(target)
             self._preview_snapshot = None
-        elif abs(self.extrusion) > 1e-6:
+        elif abs(self.extrusion) > _MIN_EXTRUDE:
             # Mid-drag with a real distance: treat as the commit click.
             self._commit(viewport)
             return
@@ -319,7 +325,7 @@ class PushPullTool(Tool):
         """Show the forming solid by applying the real commit to the mesh, after
         reverting the previous frame's preview."""
         self._revert_preview(viewport)
-        if self.base_face is None or abs(self.extrusion) < 1e-6:
+        if self.base_face is None or abs(self.extrusion) < _MIN_EXTRUDE:
             viewport.update()
             return
         self._preview_snapshot = self._target_mesh(viewport.scene).capture_state()
@@ -353,6 +359,14 @@ class PushPullTool(Tool):
         targets and stay unbounded; the punch stops at them on its own).
         Pushing exactly *to* the limit is allowed: landing flush dissolves or
         opens the geometry (collapse a box flat, cut a notch through a floor).
+
+        A second, *lateral* bound: the depth at which the swept loop would
+        first leave the solid through a **non-parallel** boundary face (push a
+        triangular prism's long wall inward and the sweep exits through a
+        slanted wall long before any parallel blocker). Beyond that depth the
+        result isn't representable without boolean subtraction, so the push
+        clamps there — the solid stays a solid.
+
         Stored in ``self._limit_in``; ``None`` = unbounded."""
         self._limit_in = None
         if not self._attached or self.base_face is None:
@@ -378,6 +392,64 @@ class PushPullTool(Tool):
                 continue  # laterally elsewhere (another building's wall)
             if self._limit_in is None or dist < self._limit_in:
                 self._limit_in = dist
+
+        # Immediate lateral exit: a backing wall that leans *away* from the
+        # push (−n has a component out of it) overflows at any depth — the
+        # long wall of a triangular prism can't move inward at all without
+        # boolean subtraction. Limit 0 (the push becomes a no-op).
+        direction = -n
+        mesh = scene.mesh
+        for loop in [self.base_face.loop] + self.base_face.hole_loops:
+            cnt = len(loop)
+            for i in range(cnt):
+                ed = mesh.find_edge(loop[i], loop[(i + 1) % cnt])
+                if ed is None:
+                    continue
+                for g in ed.faces:
+                    if g is self.base_face or g.interior:
+                        continue
+                    gn = g.normal().normalized()
+                    if abs(QVector3D.dotProduct(gn, n)) > 0.999:
+                        continue  # parallel/coplanar: not a lateral wall
+                    if QVector3D.dotProduct(direction, gn) > 1e-6:
+                        self._limit_in = 0.0
+                        return
+
+        # Lateral exit bound: march inward (−n) from points just inside the
+        # base loop and take the first crossing of any non-parallel boundary
+        # face. Parallel faces are the blocker/through logic above; interior
+        # partitions are not boundary and don't end the solid.
+        loop3 = self.base_face.vertices
+        u, w = plane_basis(n)
+        origin3 = loop3[0]
+        loop_xy = [(QVector3D.dotProduct(p - origin3, u),
+                    QVector3D.dotProduct(p - origin3, w)) for p in loop3]
+        ip_xy = _interior_point(loop_xy)
+        ip3 = origin3 + u * ip_xy[0] + w * ip_xy[1]
+        samples = [ip3]
+        for i, p in enumerate(loop3):
+            samples.append(p + (ip3 - p) * 1e-3)
+            mid = (p + loop3[(i + 1) % len(loop3)]) * 0.5
+            samples.append(mid + (ip3 - mid) * 1e-3)
+        lateral = None
+        for g in scene.faces:
+            if g is self.base_face or g.interior:
+                continue
+            if abs(QVector3D.dotProduct(g.normal().normalized(), n)) > 0.999:
+                continue  # parallel: blocker/through logic owns it
+            for tri in g.triangulate():
+                for q in samples:
+                    t = _ray_triangle(q, direction, tri)
+                    if t is not None and t > 1e-4 and (
+                            lateral is None or t < lateral):
+                        lateral = t
+        if lateral is not None:
+            # Unlike a parallel blocker (face lands flush on face and
+            # dissolves), the lateral contact is an edge-on graze — landing
+            # exactly there degenerates the swept walls. Stop a hair short.
+            lateral = max(lateral - 1e-3, 0.0)
+            if self._limit_in is None or lateral < self._limit_in:
+                self._limit_in = lateral
 
     def _clamp_extrusion(self) -> None:
         if self._limit_in is not None and self.extrusion < -self._limit_in:
@@ -408,6 +480,17 @@ class PushPullTool(Tool):
                         vtx.position - self._anchor, self._normal))
         return best[1] if best else None
 
+    @staticmethod
+    def _cap_loop_positions(face) -> list[QVector3D]:
+        """Every boundary position of ``face`` — outer loop *and* hole rims.
+        The prism-translate path moves all of them (a hole rim left behind
+        warps the cap into a non-planar holed face), and reference inference
+        excludes all of them from snapping."""
+        pts = [QVector3D(v) for v in face.vertices]
+        for hole in face.holes:
+            pts.extend(QVector3D(v) for v in hole)
+        return pts
+
     def _classify_base(self, scene) -> tuple[bool, bool]:
         """Classify the base face for previewing.
 
@@ -417,14 +500,22 @@ class PushPullTool(Tool):
         - ``prism_cap`` — every edge backs onto a *perpendicular* wall, so the
           push is a clean prism extend/shrink and can be previewed by live
           translation (walls deform with the cap, clean both ways).
+
+        Hole rims count as edges of the cap too: a hole edge backing onto a
+        coplanar inner panel (a rectangle drawn on a wall) breaks prism_cap —
+        translating the cap would leave the panel and rim behind. A hole whose
+        rim backs onto perpendicular swept walls (a window tube through the
+        slab) keeps the clean translate.
         """
-        base = self.base_face.vertices
-        n = len(base)
         faces = scene.faces
-        kinds = [
-            classify_push_edge(self.base_face, base[i], base[(i + 1) % n], faces)
-            for i in range(n)
-        ]
+        kinds = []
+        for loop in [self.base_face.vertices] + self.base_face.holes:
+            n = len(loop)
+            kinds.extend(
+                classify_push_edge(self.base_face, loop[i], loop[(i + 1) % n],
+                                   faces)
+                for i in range(n)
+            )
         normal = self.base_face.normal()
         attached = all(kind != "free" for kind, _ in kinds)
         # A clean prism-cap translate only applies when every backing wall is
@@ -441,7 +532,7 @@ class PushPullTool(Tool):
         viewport.set_hover(None)  # the hovered face is about to be replaced
         viewport.set_suppressed_faces(set())
         self._revert_preview(viewport)  # drop the live preview; redo it for real
-        if self.base_face is None or abs(self.extrusion) < 1e-6:
+        if self.base_face is None or abs(self.extrusion) < _MIN_EXTRUDE:
             self._reset()
             viewport.update()
             return
@@ -475,14 +566,19 @@ class PushPullTool(Tool):
                              normal * d)
             seed = list(self._cap_positions) + [p + normal * d
                                                 for p in self._cap_positions]
-            run_stitch(scene.mesh, {_key(p) for p in seed}, set(),
-                       coplanar_merge=False)
-            # A shrink can land the cap flush on a coplanar neighbour (a bump
-            # pushed back level with its wall): rebuild that plane so the
-            # redundant pane and its mouth ring dissolve into the host face.
-            if not _mesh_is_flat(scene.mesh) and face in scene.mesh.faces:
-                for origin, plane_n in seam_planes(scene.mesh, {face}):
-                    apply_rebuild(scene.mesh, origin, plane_n)
+            seedkeys = {_key(p) for p in seed}
+            run_stitch(scene.mesh, seedkeys, set(), coplanar_merge=False)
+            # A shrink can land the cap flush on a coplanar neighbour — a bump
+            # pushed back level with its host wall, or a side flank pushed
+            # clear across the bump onto the opposite flank. The weld may then
+            # consume the pushed face itself (the coincident pair must vanish,
+            # not survive as a zero-thickness fin), so the cleanup can't hinge
+            # on it: run the same fixpoint plane rebuild as the extrude path
+            # over every face the translation touched.
+            if not _mesh_is_flat(scene.mesh):
+                fresh = {f for f in scene.mesh.faces
+                         if any(_key(v) in seedkeys for v in f.vertices)}
+                self._rebuild_planes_fixpoint(scene.mesh, fresh, seedkeys)
             orient_outward(scene.mesh)
             return
 
@@ -521,8 +617,11 @@ class PushPullTool(Tool):
         # base face stays in place as a slab division, so the build keeps it,
         # punches no through-hole and dissolves no seams — the stacked strips
         # and their belt of edges are the point, exactly like SketchUp.
-        attached = (all(kind != "free" for kind, _ in kinds)
-                    and not self._keep_base)
+        # (Known gap: an *inward* Ctrl-stack leaves strips coincident with the
+        # boundary planes uncleaned; enabling the rebuild here needs belt-safe
+        # union rules first — see the fuzz bench backlog.)
+        attached_any = all(kind != "free" for kind, _ in kinds)
+        attached = attached_any and not self._keep_base
         through = self._find_through_face(face, d, faces) if attached else None
 
         before = set(scene.mesh.faces)
@@ -547,51 +646,56 @@ class PushPullTool(Tool):
         run_stitch(scene.mesh, seedkeys, new_faces,
                    coplanar_merge=not solid and not self._keep_base)
         if solid:
-            # Deterministic root-fix (path C): recompute each touched plane's
-            # faces from its edges — the planar arrangement finds every region,
-            # winding-classification keeps the ones inside the solid and drops
-            # phantoms outside, and the union dissolves coplanar seams. Seam
-            # planes (a fresh face coplanar-adjacent to another) cover the strip
-            # stacked on a wall and the quad overlapping a wall to be notched;
-            # crack planes cover anything a nested push left unfaced.
-            #
-            # Rebuilt to a **fixpoint**: a plane's classification reads the
-            # current mesh, so a plane rebuilt while a neighbour still carries
-            # its dirty phantom can come out wrong — which made the result
-            # depend on iteration order (set order = the Python hash seed).
-            # Treating the faces a rebuild adds as fresh re-flags the affected
-            # planes next round, and ``apply_rebuild`` returning False on a
-            # stable plane makes the loop terminate. Plane keys are sorted, so
-            # the whole pass is order-deterministic. No case tree.
-            fresh = set(new_faces)
-            for _ in range(4):  # converges in 1-2 rounds; hard cap for safety
-                planes: dict = {}
-                for origin, plane_n in seam_planes(scene.mesh, fresh):
-                    planes.setdefault(plane_key(origin, plane_n)[0],
-                                      (origin, plane_n))
-                for origin, plane_n in crack_planes(scene.mesh):
-                    planes.setdefault(plane_key(origin, plane_n)[0],
-                                      (origin, plane_n))
-                changed = False
-                for key in sorted(planes):
-                    origin, plane_n = planes[key]
-                    before_faces = set(scene.mesh.faces)
-                    if apply_rebuild(scene.mesh, origin, plane_n):
-                        changed = True
-                        fresh |= set(scene.mesh.faces) - before_faces
-                if not changed:
-                    break
-                fresh = {f for f in fresh if f in scene.mesh.faces}
-            # The dissolved seams can leave redundant collinear vertices on the
-            # rebuilt faces' borders (the old cap ring's corners); one more
-            # connectivity pass collapses them. No merge — rebuild already did.
-            run_stitch(scene.mesh, seedkeys, None, coplanar_merge=False)
+            self._rebuild_planes_fixpoint(scene.mesh, set(new_faces), seedkeys)
         # Give any closed solid a consistent outward orientation — every face's
         # normal pointing out. The extrude can otherwise commit a closed solid
         # wound inconsistently (a flipped cap, or the base of a first flat→solid
         # extrude), invisible until you push that face and it extrudes *inward*.
         # No-op when the result is legitimately open (a recess in a flat sheet).
         orient_outward(scene.mesh)
+
+    @staticmethod
+    def _rebuild_planes_fixpoint(mesh, fresh: set, seedkeys: set) -> None:
+        """Deterministic root-fix (path C): recompute each touched plane's
+        faces from its edges — the planar arrangement finds every region,
+        winding-classification keeps the ones inside the solid and drops
+        phantoms outside, and the union dissolves coplanar seams. Seam planes
+        (a fresh face coplanar-adjacent to another) cover the strip stacked on
+        a wall and the quad overlapping a wall to be notched; crack planes
+        cover anything a nested push left unfaced. Shared by the extrude path
+        and the prism-translate path (whose flush landings need the same
+        volumetric resolution).
+
+        Rebuilt to a **fixpoint**: a plane's classification reads the current
+        mesh, so a plane rebuilt while a neighbour still carries its dirty
+        phantom can come out wrong — which made the result depend on iteration
+        order (set order = the Python hash seed). Treating the faces a rebuild
+        adds as fresh re-flags the affected planes next round, and
+        ``apply_rebuild`` returning False on a stable plane makes the loop
+        terminate. Plane keys are sorted, so the whole pass is
+        order-deterministic. No case tree."""
+        for _ in range(4):  # converges in 1-2 rounds; hard cap for safety
+            planes: dict = {}
+            for origin, plane_n in seam_planes(mesh, fresh):
+                planes.setdefault(plane_key(origin, plane_n)[0],
+                                  (origin, plane_n))
+            for origin, plane_n in crack_planes(mesh):
+                planes.setdefault(plane_key(origin, plane_n)[0],
+                                  (origin, plane_n))
+            changed = False
+            for key in sorted(planes):
+                origin, plane_n = planes[key]
+                before_faces = set(mesh.faces)
+                if apply_rebuild(mesh, origin, plane_n, fresh):
+                    changed = True
+                    fresh |= set(mesh.faces) - before_faces
+            if not changed:
+                break
+            fresh = {f for f in fresh if f in mesh.faces}
+        # The dissolved seams can leave redundant collinear vertices on the
+        # rebuilt faces' borders (the old cap ring's corners); one more
+        # connectivity pass collapses them. No merge — rebuild already did.
+        run_stitch(mesh, seedkeys, None, coplanar_merge=False)
 
     def _extrude_commands(self, face, base, top, base_holes, top_holes,
                           count, attached) -> list:

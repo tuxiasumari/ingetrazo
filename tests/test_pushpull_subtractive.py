@@ -76,7 +76,7 @@ def _push_real(scene, base_face, distance):
     tool._normal = base_face.normal()
     tool._attached, tool._prism_cap = tool._classify_base(scene)
     prism_cap = tool._prism_cap  # _commit resets the tool, so capture it first
-    tool._cap_positions = [QVector3D(v) for v in base_face.vertices]
+    tool._cap_positions = tool._cap_loop_positions(base_face)
     tool._commit(vp)
     return prism_cap
 

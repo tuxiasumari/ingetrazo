@@ -122,20 +122,44 @@ def ray_parity_outside(origin: QVector3D, direction: QVector3D,
     return outside_votes > inside_votes
 
 
-def _normal_points_outward(face, tris_by_face: dict, rng: random.Random) -> Optional[bool]:
-    """Whether ``face``'s current normal points out of the solid, by parity ray
-    casting from its centroid. ``None`` when the votes don't agree (degenerate —
-    leave the face as is)."""
+def _face_side_state(face, tris_by_face: dict, rng: random.Random) -> Optional[str]:
+    """Classify ``face`` against the volume bounded by ``tris_by_face`` (the
+    current *boundary* faces): ``"outward"`` / ``"inward"`` for a boundary face
+    (by which side is empty), ``"interior"`` for a partition with material on
+    both sides (the slab a Ctrl-push keeps, a wall two rooms share), ``None``
+    when undecidable (degenerate face, tied votes)."""
     n = face.normal()
     if n.length() < 1e-9:
         return None
     others = [t for f, t in tris_by_face.items() if f is not face]
     # The region just past the centroid along the normal being outside is
     # exactly the normal pointing outward.
-    return ray_parity_outside(face.centroid(), n, others, rng)
+    ahead = ray_parity_outside(face.centroid(), n, others, rng)
+    if ahead is not False:
+        return "outward" if ahead else None
+    # The +normal side is inside. An inward-wound boundary face has its *other*
+    # side outside; an interior partition is inside both ways.
+    behind = ray_parity_outside(face.centroid(), -n, others, rng)
+    if behind is True:
+        return "inward"
+    return "interior" if behind is False else None
 
 
 # ---- Public API ------------------------------------------------------------
+
+def _all_coplanar(mesh) -> bool:
+    """Cheap flatness test: every face on one plane (a 2D drawing)."""
+    first = mesh.faces[0]
+    n = first.normal()
+    o = first.centroid()
+    for f in mesh.faces:
+        fn = f.normal()
+        if abs(QVector3D.dotProduct(fn, n)) < 0.999:
+            return False
+        if abs(QVector3D.dotProduct(f.centroid() - o, n)) > 1e-4:
+            return False
+    return True
+
 
 def is_closed(mesh) -> bool:
     """Whether the mesh has no boundary: every edge borders at least two faces.
@@ -151,34 +175,66 @@ def signed_volume(mesh) -> float:
     origin over each triangulated face). For a consistently-oriented closed
     solid its magnitude is the real volume and its sign reports the global
     winding (positive == outward by the right-hand rule). Mixed winding gives a
-    meaningless value — use it only to confirm consistency."""
+    meaningless value — use it only to confirm consistency. Interior partitions
+    (marked by :func:`orient_outward`) are not boundary and are skipped — their
+    arbitrary winding would bias the sum."""
     total = 0.0
     for f in mesh.faces:
+        if f.interior:
+            continue
         for a, b, c in f.triangulate():
             total += QVector3D.dotProduct(a, QVector3D.crossProduct(b, c)) / 6.0
     return total
 
 
 def orient_outward(mesh, seed: int = 12345) -> list:
-    """Flip the faces of a closed solid so every normal points outward. Returns
-    the faces that were flipped.
+    """Flip the faces of a closed solid so every boundary normal points
+    outward, and mark interior partitions (``face.interior``). Returns the
+    faces that were flipped.
 
     No-op (returns ``[]``) on a mesh that isn't closed — an open sheet or flat
-    drawing has no outside, so there is nothing to orient. Decided per face by
-    parity ray casting (see module docstring), so it tolerates the non-manifold
-    edges of architecture (an interior wall shared by two rooms is *not* part of
-    a single closed shell and is left as is by the closedness gate).
-    """
+    drawing has no outside, so there is nothing to orient.
+
+    Parity ray-casting only means anything against the *boundary* faces, but an
+    interior partition (the slab a Ctrl-push keeps, a wall two rooms share) is
+    not boundary — a ray crossing it would flip parity without leaving the
+    solid. So the partitions are peeled off iteratively: classify every face
+    against the current boundary set, drop the ones that read interior,
+    reclassify — to a fixpoint (typically 1 extra round; capped). Boundary
+    faces judged inward are then flipped; partitions keep their winding (no
+    winding of theirs is outward)."""
+    if not mesh.faces:
+        return []
+    if _all_coplanar(mesh):
+        # A flat drawing has no volume at all: no partitions, nothing to flip.
+        for f in mesh.faces:
+            f.interior = False
+        return []
+    all_tris = _face_triangles(mesh)
+    boundary = dict(all_tris)
+    for _ in range(4):
+        rng = random.Random(seed)
+        interior_now = {
+            f for f in mesh.faces
+            if _face_side_state(f, boundary, rng) == "interior"
+        }
+        if interior_now == {f for f in mesh.faces if f not in boundary}:
+            break
+        boundary = {f: t for f, t in all_tris.items() if f not in interior_now}
+    for f in mesh.faces:
+        f.interior = f not in boundary
+
+    # Flipping needs a real outside, which only a closed mesh has. The marks
+    # above are still computed for open meshes (a plan mixing raised rooms
+    # with flat floors is open as a whole, yet its interior walls are real
+    # partitions the volumetric queries must skip).
     if not is_closed(mesh):
         return []
     rng = random.Random(seed)
-    tris_by_face = _face_triangles(mesh)
-    to_flip = []
-    for f in mesh.faces:
-        outward = _normal_points_outward(f, tris_by_face, rng)
-        if outward is False:
-            to_flip.append(f)
-
+    to_flip = [
+        f for f in boundary
+        if _face_side_state(f, boundary, rng) == "inward"
+    ]
     for f in to_flip:
         # Flip in place: reversing the loops reverses the winding (so the normal
         # flips) while keeping the *same* Face object and its shared edges/

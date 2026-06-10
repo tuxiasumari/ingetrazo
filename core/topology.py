@@ -1185,8 +1185,9 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
 
     Returns the faces removed (the rebuilt/flipped ones don't count).
     """
+    flat = _mesh_is_flat(mesh)
     if partial is None:
-        partial = _mesh_is_flat(mesh)
+        partial = flat
 
     # 0a. Prune duplicate division lines: an edge bounding no face that lies
     #     collinearly over another edge (the unwelded collinear-overlap that
@@ -1197,8 +1198,12 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
     #     it then merges the walls instead of deleting one.
     resolve_tjunctions(mesh)
 
-    # 0c. Flip any reversed face so coplanar faces face the same way.
-    orient_coplanar_faces(mesh)
+    # 0c. Flip any reversed face so coplanar faces face the same way — only
+    #     meaningful on a flat drawing. In 3D one plane can legitimately carry
+    #     opposite outwards (two solids back to back share it), so winding is
+    #     the volumetric pass's job (``orient_outward`` below).
+    if flat:
+        orient_coplanar_faces(mesh)
 
     # 1. Dedupe nested holes by rebuilding the face with the outermost holes.
     for face in list(mesh.faces):
@@ -1263,6 +1268,13 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
                 # Degenerate hole arrangement — fall back to the face as it was.
                 mesh.add_face(outer, [[QVector3D(v) for v in h]
                                       for h in g.holes] or None)
+
+    # 4. (3D) Volumetric winding: a freshly drawn sub-face lands with whatever
+    #    winding the user traced; on a closed solid, orient per face (and
+    #    re-mark interior partitions). No-op on open meshes.
+    if not flat:
+        from core.orient import orient_outward
+        orient_outward(mesh)
     return removed
 
 

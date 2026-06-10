@@ -152,7 +152,7 @@ def _push(scene, hist, face, dist):
     tool._anchor = face.centroid()
     tool._attached = True
     tool._prism_cap = False
-    tool._cap_positions = [QVector3D(v) for v in face.vertices]
+    tool._cap_positions = tool._cap_loop_positions(face)
     tool._preview_delta = QVector3D(0, 0, 0)
     tool._commit(_StubVP(scene, hist))
 

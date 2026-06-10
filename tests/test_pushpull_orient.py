@@ -50,7 +50,7 @@ def _push(scene, hist, face, dist):
     tool._normal = face.normal()
     tool._anchor = face.centroid()
     tool._attached, tool._prism_cap = tool._classify_base(scene)
-    tool._cap_positions = [QVector3D(v) for v in face.vertices]
+    tool._cap_positions = tool._cap_loop_positions(face)
     tool._commit(_StubVP(scene, hist))
 
 

@@ -38,10 +38,12 @@ def _loop_area(loop):
 
 
 def _areas(faces):
-    """Sorted *net* face areas of a rebuild result (outer minus holes)."""
+    """Sorted *net* face areas of a rebuild result (outer minus holes).
+    Accepts both ``(outer, holes)`` pairs and the rebuild's
+    ``(outer, holes, is_partition)`` triples."""
     return sorted(
-        round(_loop_area(outer) - sum(_loop_area(h) for h in holes), 2)
-        for outer, holes in faces
+        round(_loop_area(item[0]) - sum(_loop_area(h) for h in item[1]), 2)
+        for item in faces
     )
 
 
@@ -117,7 +119,7 @@ def test_cap_with_hole_keeps_the_hole():
     orient_outward(m)
     faces = rebuild_plane(m, V(0, 0, 3), V(0, 0, 1))
     assert len(faces) == 1
-    outer_loop, holes = faces[0]
+    outer_loop, holes, _interior = faces[0]
     assert len(holes) == 1
     assert _areas(faces) == [32.0]   # 36 − 4
 
@@ -146,7 +148,7 @@ def _push(scene, hist, face, dist):
     t._normal = face.normal()
     t._anchor = face.centroid()
     t._attached, t._prism_cap = t._classify_base(scene)
-    t._cap_positions = [QVector3D(v) for v in face.vertices]
+    t._cap_positions = t._cap_loop_positions(face)
     t._commit(_StubVP(scene, hist))
 
 
@@ -294,7 +296,7 @@ def test_rebuild_order_independent_on_overhang():
             t._anchor = fwall.centroid()
             t._normal = fwall.normal()
             t._attached, t._prism_cap = t._classify_base(scene)
-            t._cap_positions = [QVector3D(v) for v in fwall.vertices]
+            t._cap_positions = t._cap_loop_positions(fwall)
             t._commit(_VP(scene))
             m = scene.mesh
             seams = [e for e in m.edges if len(e.faces) == 2 and

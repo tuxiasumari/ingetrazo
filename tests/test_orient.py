@@ -128,6 +128,48 @@ def test_prism_signed_volume_positive():
     assert signed_volume(m) > 0.0
 
 
+# ---- interior partitions are left as is -------------------------------------
+# Fuzz-bench find (cube seed=0): an interior face — the slab a Ctrl-push keeps,
+# a wall shared by two rooms — is inside the solid on *both* sides, so no
+# winding is outward. orient_outward used to flip it on every call (the +normal
+# side reads "inside" → flip → same again), so each commit toggled it and the
+# pass was not idempotent.
+
+def _two_storey_box(m: Mesh) -> None:
+    """A 1×1×2 box with an interior slab at z=1: bottom, top, slab, and the
+    four walls split into lower/upper quads (so every slab edge carries three
+    faces and the mesh stays closed)."""
+    lo = [V(0, 0, 0), V(1, 0, 0), V(1, 1, 0), V(0, 1, 0)]
+    mid = [V(0, 0, 1), V(1, 0, 1), V(1, 1, 1), V(0, 1, 1)]
+    hi = [V(0, 0, 2), V(1, 0, 2), V(1, 1, 2), V(0, 1, 2)]
+    m.add_face(lo)
+    m.add_face(mid)   # the interior slab
+    m.add_face(hi)
+    for i in range(4):
+        j = (i + 1) % 4
+        m.add_face([lo[i], lo[j], mid[j], mid[i]])
+        m.add_face([mid[i], mid[j], hi[j], hi[i]])
+
+
+def test_interior_partition_is_not_flipped():
+    m = Mesh()
+    _two_storey_box(m)
+    slab = next(f for f in m.faces
+                if all(abs(v.z() - 1) < 1e-9 for v in f.vertices))
+    before = [QVector3D(v) for v in slab.vertices]
+    orient_outward(m)
+    assert [(_v.x(), _v.y(), _v.z()) for _v in slab.vertices] == \
+        [(_v.x(), _v.y(), _v.z()) for _v in before]
+
+
+def test_orientation_idempotent_with_interior_partition():
+    m = Mesh()
+    _two_storey_box(m)
+    orient_outward(m)
+    assert orient_outward(m) == []
+    assert orient_outward(m) == []
+
+
 # ---- no-op on open / flat geometry -----------------------------------------
 
 def test_open_sheet_is_noop():
