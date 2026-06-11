@@ -537,24 +537,30 @@ class Mesh:
         return changed
 
     def dedupe_faces(self) -> int:
-        """Drop faces occupying exactly the same edge cycle as another — a box
+        """Drop faces occupying the same *outer* edge cycle as another — a box
         pushed flat (top welded onto bottom), or a room raised whose shared
-        wall the neighbour's push already built. Two coincident faces are
-        always junk in a surface model; SketchUp keeps one. Returns how many
-        were removed."""
+        wall the neighbour's push already built. Two faces over one region are
+        always junk in a surface model; SketchUp keeps one. When the pair
+        differs in holes (a plain cap collapsed onto a subdivided base), the
+        one with more holes survives — it carries the user's subdivision, and
+        its holes are filled by their own faces. Returns how many were
+        removed."""
         seen: dict = {}
         removed = 0
         for f in list(self.faces):
             sig = frozenset(
-                frozenset((id(lp[i]), id(lp[(i + 1) % len(lp)])))
-                for lp in (f.loop, *f.hole_loops)
-                for i in range(len(lp))
+                frozenset((id(f.loop[i]), id(f.loop[(i + 1) % len(f.loop)])))
+                for i in range(len(f.loop))
             )
-            if sig in seen:
-                self.remove_face(f)
-                removed += 1
-            else:
+            other = seen.get(sig)
+            if other is None:
                 seen[sig] = f
+                continue
+            drop, keep = ((other, f) if len(f.hole_loops) > len(other.hole_loops)
+                          else (f, other))
+            self.remove_face(drop)
+            seen[sig] = keep
+            removed += 1
         return removed
 
     def _weld_into(self, keep: Vertex, dup: Vertex) -> None:

@@ -116,6 +116,26 @@ def test_draw_on_shared_plane_does_not_flip_the_other_solid():
     assert orient_outward(scene.mesh) == []
 
 
+# ---- full collapse onto a subdivided face (fuzz: prism seed 132) -------------
+
+def test_dedupe_same_outer_cycle_keeps_the_subdivided_face():
+    # A plain cap collapsed onto a subdivided base shares its *outer* cycle
+    # but not its holes — the old identical-cycle signature missed the pair
+    # and the flat result kept both stacked (fuzz prism seed 132). The
+    # subdivided face must survive (its holes are filled by their own faces).
+    from core.mesh import Mesh
+
+    m = Mesh()
+    outer = [V(0, 0), V(4, 0), V(4, 4), V(0, 4)]
+    hole = [V(1, 1), V(2, 1), V(2, 2), V(1, 2)]
+    holed = m.add_face(outer, [hole])
+    m.add_face(hole)            # the filler
+    m.add_face(list(outer))     # the plain duplicate (collapsed cap)
+    assert m.dedupe_faces() == 1
+    assert holed in m.faces     # the subdivided one survived
+    assert len(m.faces) == 2
+
+
 # ---- nested rectangles punch the right mother (fuzz: prism seed 108) ---------
 
 def test_nested_rectangle_punches_its_mother_not_grandmother():
