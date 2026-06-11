@@ -201,6 +201,32 @@ def test_two_ctrl_stacks_stay_closed():
     assert orient_outward(m) == []
 
 
+# ---- Ctrl-stack into solid interior lays new divisions (fuzz: prism seed 96) --
+
+def test_ctrl_stack_into_body_keeps_its_new_divisions():
+    # Recess a drawn rect into the cube, then Ctrl-push one recess wall
+    # sideways *into the body*. The stack's tube quads cut through solid
+    # interior where no face existed — material on both sides, no old
+    # coverage — and used to be dropped as phantom mouths, cracking the shell.
+    scene, hist, user = _cube_scene()
+    _draw_rect(scene, hist, [V(1, 1, 3), V(2, 1, 3), V(2, 2, 3), V(1, 2, 3)],
+               user)
+    rect = next(f for f in scene.mesh.faces
+                if len(f.vertices) == 4 and not f.holes
+                and all(abs(v.z() - 3) < 1e-9 for v in f.vertices)
+                and max(v.x() for v in f.vertices) <= 2.001)
+    n = rect.normal()
+    _push(scene, hist, rect, -1.0 if n.z() > 0 else 1.0)   # recess down 1
+    wall = next(f for f in scene.mesh.faces
+                if all(abs(v.x() - 2) < 1e-9 for v in f.vertices)
+                and f.centroid().z() > 2.0)                # recess east wall
+    n = wall.normal()
+    _push(scene, hist, wall, -0.5 if n.x() > 0 else 0.5, keep_base=True)
+    m = scene.mesh
+    assert is_closed(m)
+    assert orient_outward(m) == []
+
+
 # ---- interior partitions survive later pushes (fuzz: cube seed 26) -----------
 
 def test_partition_survives_push_on_another_plane():

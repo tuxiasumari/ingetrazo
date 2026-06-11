@@ -321,8 +321,8 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
     # emptied. A Ctrl push removes nothing, and an outward push only adds —
     # its quad landing on an existing wall means the spot became a legitimate
     # partition (a raised room touching its neighbour), not a boundary.
-    fresh_polys = ([] if keep_mode or not removing else
-                   _proj_polys(f for f in fresh_set if not f.interior))
+    fresh_cover_polys = _proj_polys(f for f in fresh_set if not f.interior)
+    fresh_polys = ([] if keep_mode or not removing else fresh_cover_polys)
     old_polys = _proj_polys(f for f in mesh.faces
                             if f not in fresh_set or f.interior)
 
@@ -363,8 +363,14 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
                 # side emptied (parity can be blind to a void still walled in
                 # by an untrimmed neighbouring plane).
                 solid_by_side[not decl.pop()].append((outer_xy, holes_xy))
-            elif not decl and any(
-                    _poly_covers(poly, ip_xy) for poly, _ in old_polys):
+            elif not decl and (
+                any(_poly_covers(poly, ip_xy) for poly, _ in old_polys)
+                or (keep_mode and any(_poly_covers(poly, ip_xy)
+                                      for poly, _ in fresh_cover_polys))
+            ):
+                # Existing structure — or, in keep mode, the stack's own fresh
+                # quad cutting through solid interior: a Ctrl-stack grown into
+                # the body lays brand-new divisions where no face existed.
                 partitions.append((outer_xy, holes_xy))
         else:         # material on neither side
             if not decl and any(
