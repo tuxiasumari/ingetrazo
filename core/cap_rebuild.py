@@ -199,7 +199,14 @@ def _union_outline(solid_regions_xy, keep_segs=None) -> list:
     result = [(o, []) for o in outers]
     for h in holes:
         hp = _interior_point(h)
+        hkeys = frozenset(_key2(p) for p in h)
         for outer, hl in result:
+            if (len(outer) == len(h)
+                    and frozenset(_key2(p) for p in outer) == hkeys):
+                # The hole is this outer's *own* outline — a region kept as
+                # its own face (a crease/user-edge split). The hole belongs to
+                # the enclosing face, not to the face it would annihilate.
+                continue
             if _point_in_polygon(hp, outer):
                 hl.append(h)
                 break
@@ -208,7 +215,7 @@ def _union_outline(solid_regions_xy, keep_segs=None) -> list:
 
 def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
                   fresh=(), keep_mode: bool = False,
-                  removing: bool = True) -> Optional[list]:
+                  removing: bool = True, op=None) -> Optional[list]:
     """Recompute the solid *boundary* faces of ``mesh`` on the plane
     ``(origin, normal)``.
 
@@ -390,12 +397,38 @@ def rebuild_plane(mesh, origin: QVector3D, normal: QVector3D,
     # boundary there (a roof stays split over its dividing wall). Stored as 2D
     # segments — the union tests lie-on geometrically, since the arrangement
     # may have split these edges at crossings.
+    #
+    # With ``op`` (the push's own naive faces), plane edges incident to *no*
+    # op face are the user's hand-drawn subdivisions (a diagonal splitting a
+    # wall) and survive the union too — only the op's seams (the stacked
+    # strip's belt, the mouth ring) dissolve. ``op=None`` keeps the plain
+    # dissolve-everything semantics for direct callers.
+    # ``op`` = the push's own rim *segments* (3D position pairs, captured at
+    # fixpoint entry — they outlive the op faces, which earlier rounds may
+    # replace). A plane edge lying on one is the op's seam (a flush landing's
+    # contact line, a strip belt — possibly split since) and may dissolve;
+    # any other face-bearing plane edge is the user's structure and survives
+    # the union (A.4). ``op=None`` keeps the plain dissolve-everything
+    # semantics for direct callers.
+    op_rim_segs: list = []
+    if op is not None:
+        for a3, b3 in op:
+            if _on_plane(a3, origin, normal) and _on_plane(b3, origin, normal):
+                op_rim_segs.append((to2d(a3), to2d(b3)))
+
+    def _on_op_rim(e) -> bool:
+        ea, eb = to2d(e.a), to2d(e.b)
+        return any(_on_seg2(ea, a, b) and _on_seg2(eb, a, b)
+                   for a, b in op_rim_segs)
+
     keep_segs: list = []
     for e in mesh.edges:
         if not (_on_plane(e.a, origin, normal) and _on_plane(e.b, origin, normal)):
             continue
         if any(abs(QVector3D.dotProduct(f.normal().normalized(), normal)) < 0.999
                for f in e.faces):
+            keep_segs.append((to2d(e.a), to2d(e.b)))
+        elif op is not None and e.faces and not _on_op_rim(e):
             keep_segs.append((to2d(e.a), to2d(e.b)))
 
     result = []
@@ -458,7 +491,8 @@ def _canon_faces(faces_as_loops) -> frozenset:
 
 def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
                   fresh=(), keep_mode: bool = False,
-                  removing: bool = True, prune: bool = True) -> bool:
+                  removing: bool = True, prune: bool = True,
+                  op=None) -> bool:
     """Rebuild one plane of ``mesh`` in place: replace its coplanar faces with the
     deterministic solid faces from :func:`rebuild_plane`, and prune the edges left
     interior to the plane (a dissolved seam) that now border nothing. Returns
@@ -479,7 +513,8 @@ def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
     The caller snapshots for undo (the push wraps the whole mutation), so this
     keeps no inverse of its own."""
     normal = normal.normalized()
-    rebuilt = rebuild_plane(mesh, origin, normal, fresh, keep_mode, removing)
+    rebuilt = rebuild_plane(mesh, origin, normal, fresh, keep_mode, removing,
+                            op)
     if rebuilt is None:
         return False
     old = [f for f in mesh.faces if _coplanar_on(f, origin, normal)]

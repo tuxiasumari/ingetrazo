@@ -715,6 +715,17 @@ class PushPullTool(Tool):
         ``apply_rebuild`` returning False on a stable plane makes the loop
         terminate. Plane keys are sorted, so the whole pass is
         order-deterministic. No case tree."""
+        # The push's own rims, captured by *position* before any rebuild (the
+        # objects die as rounds consolidate them): plane edges lying on none
+        # of these are the user's hand-drawn subdivisions and survive the
+        # union (A.4); edges on them are the op's seams and may dissolve.
+        op_rims: list = []
+        for f in fresh:
+            for lp in (f.loop, *f.hole_loops):
+                cnt = len(lp)
+                for i in range(cnt):
+                    op_rims.append((QVector3D(lp[i].position),
+                                    QVector3D(lp[(i + 1) % cnt].position)))
         for _ in range(4):  # converges in 1-2 rounds; hard cap for safety
             planes: dict = {}
             for origin, plane_n in seam_planes(mesh, fresh):
@@ -728,7 +739,7 @@ class PushPullTool(Tool):
                 origin, plane_n = planes[key]
                 before_faces = set(mesh.faces)
                 if apply_rebuild(mesh, origin, plane_n, fresh, keep_mode,
-                                 removing):
+                                 removing, op=op_rims):
                     changed = True
                     fresh |= set(mesh.faces) - before_faces
             if not changed:
