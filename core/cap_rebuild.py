@@ -458,7 +458,7 @@ def _canon_faces(faces_as_loops) -> frozenset:
 
 def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
                   fresh=(), keep_mode: bool = False,
-                  removing: bool = True) -> bool:
+                  removing: bool = True, prune: bool = True) -> bool:
     """Rebuild one plane of ``mesh`` in place: replace its coplanar faces with the
     deterministic solid faces from :func:`rebuild_plane`, and prune the edges left
     interior to the plane (a dissolved seam) that now border nothing. Returns
@@ -469,6 +469,12 @@ def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
     (a zero-thickness fin left by a flush collapse) — and removes the plane's
     faces. ``fresh`` (this push's new faces) lets the rebuild resolve regions
     a partition used to cover (see :func:`rebuild_plane`).
+
+    ``prune=False`` keeps the faceless plane edges: inside the fixpoint loop a
+    region can be mis-dropped while a neighbouring plane still carries its
+    dirty coincidences, and a later round can only re-trace it if its edges
+    survive — the caller prunes once the loop converges
+    (:func:`prune_plane_debris`).
 
     The caller snapshots for undo (the push wraps the whole mutation), so this
     keeps no inverse of its own."""
@@ -486,10 +492,16 @@ def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
         mesh.remove_face(f)
     for outer, holes, interior in rebuilt:
         mesh.add_face(outer, holes or None).interior = interior
-    # Drop edges that lie fully on the plane and ended up facing nothing — the
-    # interior seams the union dissolved. Perimeter edges still border a wall, so
-    # they keep a face and survive. Vertices those edges leave behind with no
-    # incidence at all go too (they would otherwise haunt snapping).
+    if prune:
+        prune_plane_debris(mesh, origin, normal)
+    return True
+
+
+def prune_plane_debris(mesh, origin: QVector3D, normal: QVector3D) -> None:
+    """Drop edges that lie fully on the plane and face nothing — the interior
+    seams a union dissolved. Perimeter edges still border a wall, so they keep
+    a face and survive. Vertices those edges leave behind with no incidence at
+    all go too (they would otherwise haunt snapping)."""
     for e in list(mesh.edges):
         if (not e.faces
                 and _on_plane(e.a, origin, normal)
@@ -506,7 +518,6 @@ def apply_rebuild(mesh, origin: QVector3D, normal: QVector3D,
             mesh.vertices.remove(v)
             if mesh._registry.get(_vkey(v.position)) is v:
                 del mesh._registry[_vkey(v.position)]
-    return True
 
 
 def plane_key(point: QVector3D, normal: QVector3D):

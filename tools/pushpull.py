@@ -50,7 +50,13 @@ from core.history import (
 )
 from core.arrangement import _interior_point, _point_in_polygon, plane_basis
 from core.orient import _ray_triangle, orient_outward
-from core.cap_rebuild import apply_rebuild, crack_planes, plane_key, seam_planes
+from core.cap_rebuild import (
+    apply_rebuild,
+    crack_planes,
+    plane_key,
+    prune_plane_debris,
+    seam_planes,
+)
 from core.topology import (
     _key,
     _mesh_is_flat,
