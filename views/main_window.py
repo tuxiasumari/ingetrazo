@@ -36,6 +36,8 @@ from core.history import (
 )
 from core.mesh import Edge, Face
 from formats import igz as igz_format
+from formats import obj as obj_format
+from formats import stl as stl_format
 from tools.line import LineTool
 from tools.move import MoveTool
 from tools.offset import OffsetTool
@@ -289,6 +291,16 @@ class MainWindow(QMainWindow):
 
         actions.append(self._separator())
 
+        export_stl_action = QAction("Export STL…", self)
+        export_stl_action.triggered.connect(self._on_export_stl)
+        actions.append(export_stl_action)
+
+        export_obj_action = QAction("Export OBJ…", self)
+        export_obj_action.triggered.connect(self._on_export_obj)
+        actions.append(export_obj_action)
+
+        actions.append(self._separator())
+
         quit_action = QAction("Quit", self)
         quit_action.setShortcut(QKeySequence.Quit)
         quit_action.triggered.connect(self.close)
@@ -520,6 +532,29 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._saved_version = self.viewport.scene.version
         self._update_title()
+
+    def _on_export_stl(self) -> None:
+        self._export("STL", "stl", "STL mesh (*.stl)", stl_format.save_stl)
+
+    def _on_export_obj(self) -> None:
+        self._export("OBJ", "obj", "Wavefront OBJ (*.obj)", obj_format.save_obj)
+
+    def _export(self, label: str, suffix: str, file_filter, writer) -> None:
+        base = (self._current_path.stem if self._current_path is not None
+                else "untitled")
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, f"Export {label}", f"{base}.{suffix}", file_filter)
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() != f".{suffix}":
+            path = path.with_suffix(f".{suffix}")
+        try:
+            writer(self.viewport.scene, path)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, f"Export {label} failed", str(exc))
+            return
+        self.statusBar().showMessage(f"Exported {label} → {path.name}", 3000)
 
     def _confirm_discard(self, prompt: str) -> bool:
         """Return True if it's safe to discard the current drawing."""

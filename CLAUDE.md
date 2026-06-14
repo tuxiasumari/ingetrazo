@@ -146,8 +146,9 @@ UI sobre `core/layers.py` (ya existe el core): visibilidad/lock por capa.
 
 **FASE 7 — Utilidad real**
 Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir modelos exportados de SketchUp), export `.dae`/`.obj`/`.stl`.
-- ✅ **Materiales — color sólido por cara HECHO (2026-06-14).** `Face.attrs["color"]` (RGB 0..1, base A.3 → rueda por push/pull + rebuild), `SetFaceColorCommand` (undoable, swap de attrs sin snapshot), **tool Paint (B)** en `tools/paint.py` (click pinta la cara / toda la selección de caras; **Alt**=eyedropper; corre sobre malla suelta y grupos vía `pick_face_any`), swatch de color en la toolbar (`QColorDialog`), render por color (VBO de caras agrupado por `attrs["color"]`, default crema, un draw por color en `viewport._face_runs`), y serialización `.igz` (`"color"` por cara). 8 tests en `tests/test_materials.py`. Falta: **textura** por cara, y **Dimensions** + import/export.
-- **DoD:** importo un `.dae` de SketchUp, lo acoto, lo pinto y exporto a STL.
+- ✅ **Materiales — color sólido por cara HECHO (2026-06-14).** `Face.attrs["color"]` (RGB 0..1, base A.3 → rueda por push/pull + rebuild), `SetFaceColorCommand` (undoable, swap de attrs sin snapshot), **tool Paint (B)** en `tools/paint.py` (click pinta la cara / toda la selección de caras; **Alt**=eyedropper; corre sobre malla suelta y grupos vía `pick_face_any`), swatch de color en la toolbar (`QColorDialog`), render por color (VBO de caras agrupado por `attrs["color"]`, default crema, un draw por color en `viewport._face_runs`), y serialización `.igz` (`"color"` por cara). 8 tests en `tests/test_materials.py`.
+- ✅ **Export STL + OBJ HECHO (2026-06-14).** `formats/stl.py::save_stl` (binario, todas las caras de malla+grupos trianguladas con normal geométrica outward — para impresión 3D / slicers) y `formats/obj.py::save_obj` (vértices dedup por posición, triángulos agrupados por color → `.mtl` con `Kd` por material; abre en Blender/MeshLab con los colores). File ▸ Export STL… / Export OBJ…. 5 tests en `tests/test_export.py` (conteo de triángulos, normales outward, grupos incluidos, dedup de vértices, colores→materiales). Falta de Fase 7: **textura** por cara, **Dimensions** (cotas), e **import** `.dae`/`.obj`.
+- **DoD:** importo un `.dae` de SketchUp, lo acoto, lo pinto y exporto a STL. *(export a STL ✅; falta import .dae + Dimensions.)*
 
 🏁 **Al cerrar Fase 7 = v0.1 usable real.** Recién después: BIM tagging, IFC export (gancho IngePresupuestos), DXF, geo-ref, etc. (ver Roadmap v0.1 largo abajo).
 
@@ -425,7 +426,9 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 │   ├── paint.py               ← PaintTool (B) — color por cara (attrs["color"]); Alt=eyedropper
 │   └── pushpull.py            ← PushPullTool (extrude / recess / step / pasante; stitch watertight)
 ├── formats/
-│   └── igz.py                 ← save_scene / load_into (JSON `.igz`, schema versionado)
+│   ├── igz.py                 ← save_scene / load_into (JSON `.igz`, schema versionado; color por cara)
+│   ├── stl.py                 ← save_stl (binario, triángulos world-space + normal outward) — impresión 3D
+│   └── obj.py                 ← save_obj (vértices indexados + .mtl con color por cara)
 ├── plugins/                   ← carpeta para complementos de terceros (vacía + README)
 ├── georef/                    ← stubs para tiles/DEM/projections (a llenar)
 ├── resources/
