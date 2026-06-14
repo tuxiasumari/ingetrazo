@@ -719,6 +719,14 @@ class Viewport(QOpenGLWidget):
         self._hover_entity = entity
         self.update()
 
+    def flash_status(self, text: str, msec: int = 2500) -> None:
+        """Briefly show ``text`` in the main window's status bar (e.g. Push/Pull's
+        "Offset limited to X m"). No-op if there is no status bar yet."""
+        window = self.window()
+        bar = window.statusBar() if window is not None else None
+        if bar is not None:
+            bar.showMessage(text, msec)
+
     def set_suppressed_faces(self, faces) -> None:
         """Hide a set of scene faces from the normal pass (e.g. the flat inner
         face a Push/Pull is recessing). Identity-keyed; empty set restores.
@@ -858,6 +866,10 @@ class Viewport(QOpenGLWidget):
         ):
             self._draw_snap_indicator(painter, self.last_snap)
 
+        # Push/Pull distance-inference marker (a green square on the corner/face
+        # the extrusion is snapping level with).
+        self._draw_inference_marker(painter)
+
         # Length measurement near rubber band
         self._draw_length_label(painter)
 
@@ -977,6 +989,26 @@ class Viewport(QOpenGLWidget):
             painter.drawText(QPointF(px + 11, py + 17), label)
             painter.setPen(QPen(color))
             painter.drawText(QPointF(px + 10, py + 16), label)
+
+    def _draw_inference_marker(self, painter: QPainter) -> None:
+        """Green endpoint-style square where the active tool's distance
+        inference is engaged (Push/Pull snapping level with a corner or face)."""
+        tool = self.active_tool
+        provider = getattr(tool, "inference_marker", None) if tool is not None else None
+        if not callable(provider):
+            return
+        result = provider()
+        if result is None:
+            return
+        world, _kind = result
+        pixel = self._world_to_pixel(world)
+        if pixel is None:
+            return
+        px, py = pixel
+        color = QColor.fromRgbF(0.16, 0.62, 0.36, 1.0)  # SketchUp endpoint green
+        painter.setPen(QPen(color, 2.0))
+        painter.setBrush(QColor.fromRgbF(0.16, 0.62, 0.36, 0.25))
+        painter.drawRect(QRectF(px - 5, py - 5, 10, 10))
 
     def _draw_length_label(self, painter: QPainter) -> None:
         tool = self.active_tool

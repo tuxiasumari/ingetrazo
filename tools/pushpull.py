@@ -185,6 +185,10 @@ class PushPullTool(Tool):
         # The live preview applies the real commit each frame and reverts it from
         # this snapshot before the next, so the drag shows the stitched result.
         self._preview_snapshot: dict | None = None
+        # The model point the distance inference is currently locked onto (a
+        # corner or a face hit), drawn as a green marker by the viewport overlay.
+        self._inference_point: QVector3D | None = None
+        self._inference_kind: str | None = None
 
     # ---- Lifecycle ----------------------------------------------------------
     def on_activate(self, viewport) -> None:
@@ -200,6 +204,8 @@ class PushPullTool(Tool):
     def on_hover(self, ctx: ToolContext) -> None:
         viewport = ctx.viewport
         if not self.dragging:
+            self._inference_point = None
+            self._inference_kind = None
             self.hovered_face, self._hover_group = viewport.pick_face_any(
                 ctx.screen.x(), ctx.screen.y())
             # Shade the face that would be pushed, SketchUp-style, so the target
@@ -223,7 +229,7 @@ class PushPullTool(Tool):
             )
             self.extrusion = QVector3D.dotProduct(
                 projected - self._anchor, self._normal)
-        self._clamp_extrusion()
+        self._clamp_extrusion(viewport)
         # Apply the real commit to the mesh as a live preview (reverting last
         # frame's first), so the forming solid renders exactly as it will commit.
         self._apply_preview(viewport)
@@ -287,7 +293,7 @@ class PushPullTool(Tool):
             self._commit(viewport)
             return
         self.extrusion = last
-        self._clamp_extrusion()
+        self._clamp_extrusion(viewport)
         self._commit(viewport)
 
     def on_value(self, viewport, value) -> bool:
@@ -300,7 +306,7 @@ class PushPullTool(Tool):
         # a negative one reverses it, SketchUp-style.
         sign = -1.0 if self.extrusion < 0.0 else 1.0
         self.extrusion = sign * value
-        self._clamp_extrusion()
+        self._clamp_extrusion(viewport)
         self._commit(viewport)
         return True
 
@@ -345,6 +351,14 @@ class PushPullTool(Tool):
             self._target_mesh(viewport.scene).restore_state(self._preview_snapshot)
             self._preview_snapshot = None
             viewport.scene.version += 1
+
+    def inference_marker(self):
+        """Return ``(world_point, kind)`` for the green marker the viewport draws
+        when the distance inference is locked onto a model corner/face, or
+        ``None``. ``kind`` is ``"vertex"`` or ``"face"``."""
+        if not self.dragging or self._inference_point is None:
+            return None
+        return self._inference_point, self._inference_kind
 
     def value_label(self):
         """Return ``(text, midpoint_world)`` for the floating distance label.
@@ -458,16 +472,23 @@ class PushPullTool(Tool):
             if self._limit_in is None or lateral < self._limit_in:
                 self._limit_in = lateral
 
-    def _clamp_extrusion(self) -> None:
+    def _clamp_extrusion(self, viewport=None) -> None:
         if self._limit_in is not None and self.extrusion < -self._limit_in:
             self.extrusion = -self._limit_in
+            if viewport is not None:
+                viewport.flash_status(
+                    f"Offset limited to {self._limit_in:.2f} m")
 
     def _infer_reference_distance(self, ctx: ToolContext):
-        """Distance making the moved face level with the model vertex under the
+        """Distance making the moved face level with the model geometry under the
         cursor — SketchUp's mid-push inference ("push until even with that
-        corner"). Scans the *clean* mesh (the caller reverts the live preview
-        first, so the forming solid's own moving vertices never feed back).
-        Returns ``None`` when no vertex is within the snap threshold."""
+        corner / that face"). Scans the *clean* mesh (the caller reverts the live
+        preview first, so the forming solid's own moving vertices never feed
+        back). A model **vertex** within the snap threshold wins first (a precise
+        corner); otherwise the **face** under the cursor is used, projecting the
+        ray∩plane hit onto the push axis (level with where you point on it).
+        Records the engaged point in ``self._inference_point`` for the overlay
+        marker. Returns ``None`` when nothing engages."""
         vp = ctx.viewport
         sx, sy = ctx.screen.x(), ctx.screen.y()
         thr = getattr(vp, "snap_threshold_px", 9.0)
@@ -484,8 +505,37 @@ class PushPullTool(Tool):
                 d2 = (pix[0] - sx) ** 2 + (pix[1] - sy) ** 2
                 if d2 <= thr * thr and (best is None or d2 < best[0]):
                     best = (d2, QVector3D.dotProduct(
-                        vtx.position - self._anchor, self._normal))
-        return best[1] if best else None
+                        vtx.position - self._anchor, self._normal),
+                        QVector3D(vtx.position), "vertex")
+        if best is not None:
+            self._inference_point = best[2]
+            self._inference_kind = best[3]
+            return best[1]
+
+        # No corner nearby: align to the face under the cursor (its plane).
+        # Project the ray∩plane hit onto the push axis. The base face (and
+        # anything coplanar with it) reads ~0 distance — guarded out so the
+        # push doesn't pin to its own plane.
+        face, _grp = vp.pick_face_any(sx, sy)
+        if face is not None and face is not self.base_face:
+            origin, direction = vp._pixel_to_ray(sx, sy)
+            if origin is not None and direction is not None:
+                fn = face.normal().normalized()
+                denom = QVector3D.dotProduct(fn, direction)
+                if abs(denom) >= 1e-6:
+                    t = QVector3D.dotProduct(
+                        fn, face.centroid() - origin) / denom
+                    if t > 0:
+                        hit = origin + direction * t
+                        dist = QVector3D.dotProduct(
+                            hit - self._anchor, self._normal)
+                        if abs(dist) >= _MIN_EXTRUDE:
+                            self._inference_point = hit
+                            self._inference_kind = "face"
+                            return dist
+        self._inference_point = None
+        self._inference_kind = None
+        return None
 
     @staticmethod
     def _cap_loop_positions(face) -> list[QVector3D]:
@@ -865,3 +915,5 @@ class PushPullTool(Tool):
         self._normal = None
         self._cap_positions = []
         self._preview_snapshot = None
+        self._inference_point = None
+        self._inference_kind = None

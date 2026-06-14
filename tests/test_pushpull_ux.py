@@ -27,8 +27,13 @@ class _StubViewport:
         self.history = History(scene)
         self._pick = pick
 
+    last_status = None
+
     def update(self):
         pass
+
+    def flash_status(self, text, msec=2500):
+        self.last_status = text
 
     def set_hover(self, entity):
         pass
@@ -394,6 +399,84 @@ def test_hovering_vertex_infers_distance():
     ctx3 = ToolContext(viewport=vp, world=QVector3D(), screen=QPointF(0.0, -30.0),
                        modifiers=Qt.NoModifier, snap=None)
     assert tool._infer_reference_distance(ctx3) is None
+
+
+class _FaceInferViewport(_StubViewport):
+    """Stub aiming a top-down ray at ``ref_face`` so the face-fallback of the
+    distance inference engages (no vertex within threshold)."""
+
+    snap_threshold_px = 9.0
+
+    def __init__(self, scene, ref_face):
+        super().__init__(scene)
+        self._ref = ref_face
+
+    def _world_to_pixel(self, world):
+        return (world.x() * 10.0, -world.z() * 10.0)
+
+    def pick_face_any(self, x, y):
+        return self._ref, None
+
+    def _pixel_to_ray(self, x, y):
+        # A ray straight down through (x/10, 1, 100): hits any horizontal plane.
+        return QVector3D(x / 10.0, 1.0, 100.0), QVector3D(0.0, 0.0, -1.0)
+
+
+def test_hovering_face_infers_distance_and_marks_it():
+    from PySide6.QtCore import QPointF
+    from tools.base import ToolContext
+
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, height=3.0)                      # cube top at z=3
+    # A free-floating reference face high above, away from any vertex.
+    ref_loop = [V(20, 20, 7), V(24, 20, 7), V(24, 24, 7), V(20, 24, 7)]
+    hist.execute(build_add_edges(
+        scene, [(ref_loop[i], ref_loop[(i + 1) % 4]) for i in range(4)],
+        detect_faces=False, extra=[AddFaceCommand(list(ref_loop))]))
+    ref = next(f for f in scene.faces
+               if all(abs(v.z() - 7) < 1e-9 for v in f.vertices))
+
+    tool = PushPullTool()
+    top = _top(scene, 3.0)
+    tool.base_face = top
+    tool.dragging = True
+    tool._anchor = top.centroid()
+    tool._normal = top.normal()
+    tool._attached, tool._prism_cap = tool._classify_base(scene)
+    tool._cap_positions = tool._cap_loop_positions(top)
+
+    vp = _FaceInferViewport(scene, ref)
+    # No vertex near the cursor → falls back to the face plane (z=7). Anchor at
+    # z=3 → distance +4, and the engaged hit point is recorded for the marker.
+    ctx = ToolContext(viewport=vp, world=QVector3D(), screen=QPointF(220.0, -70.0),
+                      modifiers=Qt.NoModifier, snap=None)
+    d = tool._infer_reference_distance(ctx)
+    assert d is not None and abs(d - 4.0) < 1e-6
+    marker = tool.inference_marker()
+    assert marker is not None
+    pt, kind = marker
+    assert kind == "face" and abs(pt.z() - 7.0) < 1e-6
+
+
+def test_clamp_flashes_status_message():
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist, height=3.0)
+    tool = PushPullTool()
+    top = _top(scene, 3.0)
+    tool.base_face = top
+    tool.dragging = True
+    tool._anchor = top.centroid()
+    tool._normal = top.normal()
+    tool._attached, tool._prism_cap = tool._classify_base(scene)
+    tool._cap_positions = tool._cap_loop_positions(top)
+    tool._compute_inward_limit(scene)
+    tool.extrusion = -99.0
+    vp = _StubViewport(scene)
+    tool._clamp_extrusion(vp)
+    assert tool.extrusion == -3.0
+    assert vp.last_status == "Offset limited to 3.00 m"
 
 
 # ---- autofold: a move that warps a face splits it into planar pieces ----------
