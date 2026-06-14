@@ -41,6 +41,10 @@ def _face_json(f) -> dict:
         entry["holes"] = [
             [[v.x(), v.y(), v.z()] for v in loop] for loop in f.holes
         ]
+    # Material colour (the Paint tool), written only when set.
+    color = getattr(f, "attrs", {}).get("color")
+    if color is not None:
+        entry["color"] = list(color)
     return entry
 
 
@@ -100,4 +104,7 @@ def _load_mesh(mesh, payload) -> None:
     for raw in payload.get("faces", []):
         verts = [QVector3D(*v) for v in raw["vertices"]]
         holes = [[QVector3D(*v) for v in loop] for loop in raw.get("holes", [])]
-        mesh.add_face(verts, holes)
+        face = mesh.add_face(verts, holes)
+        color = raw.get("color")
+        if color is not None and face is not None:
+            face.attrs["color"] = list(color)

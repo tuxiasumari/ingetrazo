@@ -146,6 +146,7 @@ UI sobre `core/layers.py` (ya existe el core): visibilidad/lock por capa.
 
 **FASE 7 — Utilidad real**
 Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir modelos exportados de SketchUp), export `.dae`/`.obj`/`.stl`.
+- ✅ **Materiales — color sólido por cara HECHO (2026-06-14).** `Face.attrs["color"]` (RGB 0..1, base A.3 → rueda por push/pull + rebuild), `SetFaceColorCommand` (undoable, swap de attrs sin snapshot), **tool Paint (B)** en `tools/paint.py` (click pinta la cara / toda la selección de caras; **Alt**=eyedropper; corre sobre malla suelta y grupos vía `pick_face_any`), swatch de color en la toolbar (`QColorDialog`), render por color (VBO de caras agrupado por `attrs["color"]`, default crema, un draw por color en `viewport._face_runs`), y serialización `.igz` (`"color"` por cara). 8 tests en `tests/test_materials.py`. Falta: **textura** por cara, y **Dimensions** + import/export.
 - **DoD:** importo un `.dae` de SketchUp, lo acoto, lo pinto y exporto a STL.
 
 🏁 **Al cerrar Fase 7 = v0.1 usable real.** Recién después: BIM tagging, IFC export (gancho IngePresupuestos), DXF, geo-ref, etc. (ver Roadmap v0.1 largo abajo).
@@ -169,7 +170,7 @@ Materiales (color/textura por cara), Dimensions, import `.dae`/`.obj` (abrir mod
 | 2. Vanos: puerta + ventana (push **atravesando**) | **Push/pull pasante (through-hole)** | ✅ (sesión 2026-06-08) |
 | 3. Techo a dos aguas (subir el caballete) | **Move (M)** + topología que aguante mover | ✅ (frontón se rellena, gable) |
 | 4. Tabiques + escalera | Subdivisión + grada solid-aware | ✅ (sesión 2026-06-06) |
-| 5. Acabados (color por cara, cotas) | Materials + Dimensions (Fase 7) | ❌ |
+| 5. Acabados (color por cara, cotas) | Materials + Dimensions (Fase 7) | 🟡 color por cara ✅ (2026-06-14); cotas ❌ |
 
 **Reorden que revela la casita:** los bloqueos reales para *producir* una casita son **push/pull pasante** (puerta/ventana) y **Move** (techo) — que el roadmap abstracto tenía más abajo que "Fase 2 Selección". Selección *habilita el flujo* (agarrar caras cómodo) pero pasante + Move *producen la casita*.
 
@@ -232,7 +233,7 @@ Tras el fix de raíz se auditó el push/pull contra SketchUp (el usuario es ex-u
 > **Lo que queda, en orden sugerido para arrancar:**
 >
 > 1. **4 seeds `KNOWN_BAD` restantes (todos draw-side) — son la punta de un iceberg de SOLAPES coplanares (ver investigación abajo).** `cube 121`, `plan 152`, `plan 210` (orphan edges al dibujar un rect), `plan 242` (seam). El orphan/seam al dibujar es el *síntoma*; la causa es que el motor deja **caras coplanares que se solapan (doble cobertura)** en **~326/1000 secuencias** — invisibles al bench actual (su seam-check solo mira aristas de exactamente 2 caras coplanares; un solape sin arista compartida limpia se le escapa). Lo crean **tanto push como draw**. Disolverlos limpio es adyacente al techo del rebuild (ver investigación 2026-06-14 abajo). **Decisión:** no atacarlo como "4 bugs"; es un proyecto de calidad mayor (pre-IFC/STL). Dejar los 4 como xfail.
-> 2. **Bloque C** (features de producto): Fase 2 selección (doble/triple-click), Fase 3 Eraser, face culling, Groups v2, Fase 4 (Circle/Arc/Tape), Fase 6 (UI capas), **Fase 7 Materials** (ya tiene su base con A.3 hecho) + Dimensions + import/export. Lista completa en el bloque **C** abajo.
+> 2. **Bloque C** (features de producto): Fase 2 selección (doble/triple-click), Fase 3 Eraser, face culling, Groups v2, Fase 4 (Circle/Arc/Tape), Fase 6 (UI capas), **Fase 7** — ✅ Materials color-por-cara (2026-06-14, tool Paint B); falta textura + Dimensions + import/export. Lista completa en el bloque **C** abajo.
 >
 > **El bloque A (motor "roca sólida") está COMPLETO** — A.1 fuzz bench (943/1000 limpias), A.2 caras inclinadas, A.3 `Face.attrs` por región, A.4 subdivisiones de usuario. Cerrado 2026-06-11.
 >
@@ -421,6 +422,7 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 │   ├── move.py                ← MoveTool (mueve posiciones o un grupo entero; snap/VCB/axis magnético)
 │   ├── offset.py              ← OffsetTool (F) — offset de cara → anillo + cara interna (muros con espesor)
 │   ├── paste.py               ← PasteTool — pega el clipboard siguiendo el cursor
+│   ├── paint.py               ← PaintTool (B) — color por cara (attrs["color"]); Alt=eyedropper
 │   └── pushpull.py            ← PushPullTool (extrude / recess / step / pasante; stitch watertight)
 ├── formats/
 │   └── igz.py                 ← save_scene / load_into (JSON `.igz`, schema versionado)

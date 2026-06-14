@@ -9,8 +9,16 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
+    QColorDialog,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -31,6 +39,7 @@ from formats import igz as igz_format
 from tools.line import LineTool
 from tools.move import MoveTool
 from tools.offset import OffsetTool
+from tools.paint import PaintTool
 from tools.paste import PasteTool
 from tools.pushpull import PushPullTool
 from tools.rectangle import RectangleTool
@@ -55,6 +64,7 @@ class MainWindow(QMainWindow):
             "pushpull": PushPullTool(),
             "offset": OffsetTool(),
             "move": MoveTool(),
+            "paint": PaintTool(),
         }
         self._tool_actions: dict[str, QAction] = {}
 
@@ -119,6 +129,35 @@ class MainWindow(QMainWindow):
             self._tool_group.addAction(action)
             toolbar.addAction(action)
             self._nav_actions[key] = action
+
+        # Material colour swatch for the Paint tool: shows the current colour;
+        # clicking opens a colour picker and switches to Paint.
+        toolbar.addSeparator()
+        self._color_action = QAction("Color", self)
+        self._color_action.setToolTip("Pick the paint colour and switch to Paint (B)")
+        self._color_action.triggered.connect(self._on_pick_color)
+        toolbar.addAction(self._color_action)
+        self._refresh_color_swatch()
+
+    def _color_icon(self, color: QColor) -> QIcon:
+        pm = QPixmap(20, 20)
+        pm.fill(color)
+        return QIcon(pm)
+
+    def _refresh_color_swatch(self) -> None:
+        r, g, b = PaintTool.current_color
+        self._color_action.setIcon(self._color_icon(
+            QColor.fromRgbF(r, g, b)))
+
+    def _on_pick_color(self) -> None:
+        r, g, b = PaintTool.current_color
+        chosen = QColorDialog.getColor(
+            QColor.fromRgbF(r, g, b), self, "Paint colour")
+        if chosen.isValid():
+            PaintTool.current_color = (
+                chosen.redF(), chosen.greenF(), chosen.blueF())
+            self._refresh_color_swatch()
+        self._activate_tool("paint")
 
     def _build_menubar(self) -> None:
         menubar = self.menuBar()

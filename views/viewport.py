@@ -171,6 +171,9 @@ class Viewport(QOpenGLWidget):
     # Live measurement for the VCB box (e.g. "5.00 m", "3.00 × 2.00 m").
     measurementChanged = Signal(str)
 
+    # Warm cream (SketchUp-ish) painted on faces with no material colour.
+    DEFAULT_FACE_COLOR = (0.92, 0.89, 0.81)
+
     # Tooltip text shown next to the snap marker, SketchUp-style (Spanish, to
     # match SketchUp's inference labels).
     _SNAP_LABELS = {
@@ -267,6 +270,10 @@ class Viewport(QOpenGLWidget):
         self._faces_vao = None
         self._faces_vbo = None
         self._faces_count = 0
+        # Per-colour draw ranges into the face VBO: [((r,g,b), start, count)].
+        # Faces share one VBO but are grouped by their attrs["color"] (default
+        # cream), so each material is one glDrawArrays with its own uniform.
+        self._face_runs: list = []
         self._edges_version = -1
 
         # Hover highlight (Select tool). Not version-tracked — it changes with
@@ -426,9 +433,11 @@ class Viewport(QOpenGLWidget):
         if self._faces_count > 0:
             self._gl.glEnable(GL_POLYGON_OFFSET_FILL)
             self._gl.glPolygonOffset(1.0, 1.0)
-            self._set_color(0.92, 0.89, 0.81, 1.0)  # warm cream (SketchUp-ish)
             self._faces_vao.bind()
-            self._gl.glDrawArrays(GL_TRIANGLES, 0, self._faces_count)
+            # One draw per material colour (default cream for unpainted faces).
+            for (r, g, b), start, count in self._face_runs:
+                self._set_color(r, g, b, 1.0)
+                self._gl.glDrawArrays(GL_TRIANGLES, start, count)
             self._faces_vao.release()
             self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
 
@@ -657,19 +666,31 @@ class Viewport(QOpenGLWidget):
         self._sel_faces_count = len(sel_face_data) // 3
 
         # Faces: triangulate each face (fan when simple, hole-aware when the
-        # face has been divided) and concatenate into a single VBO. Group faces
-        # render alongside the loose ones.
-        face_data = array("f")
+        # face has been divided) into one VBO, but grouped by material colour
+        # (attrs["color"], default cream) so each colour is a single draw call
+        # with its own uniform. Group faces render alongside the loose ones.
         suppressed_faces = self._suppressed_faces
+        by_color: dict = {}
         for face in self.scene.render_faces():
             if face in suppressed_faces:
                 continue
+            col = face.attrs.get("color")
+            key = tuple(col) if col is not None else self.DEFAULT_FACE_COLOR
+            buf = by_color.get(key)
+            if buf is None:
+                buf = by_color[key] = array("f")
             for t0, t1, t2 in face.triangulate():
-                face_data.extend([
+                buf.extend([
                     t0.x(), t0.y(), t0.z(),
                     t1.x(), t1.y(), t1.z(),
                     t2.x(), t2.y(), t2.z(),
                 ])
+        face_data = array("f")
+        self._face_runs = []
+        for key, buf in by_color.items():
+            start = len(face_data) // 3
+            face_data.extend(buf)
+            self._face_runs.append((key, start, len(buf) // 3))
         self._faces_vbo.bind()
         if face_data:
             face_raw = face_data.tobytes()

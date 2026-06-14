@@ -353,6 +353,38 @@ class DeleteFaceCommand(Command):
         scene.version += 1
 
 
+class SetFaceColorCommand(Command):
+    """Paint a set of faces with an RGB colour (or clear it with ``None``),
+    stored in each face's ``attrs["color"]`` — the first user-facing use of the
+    generic per-region attrs (A.3), so the colour rides through push/pull and
+    the plane rebuild. Painting changes no topology, so a direct attrs swap
+    inverts it exactly — no snapshot needed. Faces are held by reference (the
+    paint click resolves them live); undo restores each face's prior colour."""
+
+    def __init__(self, faces, color) -> None:
+        self._faces = list(faces)
+        self._color = list(color) if color is not None else None
+        self._old: Optional[list] = None  # captured on first do
+
+    def do(self, scene) -> None:
+        if self._old is None:
+            self._old = [f.attrs.get("color") for f in self._faces]
+        for f in self._faces:
+            if self._color is None:
+                f.attrs.pop("color", None)
+            else:
+                f.attrs["color"] = list(self._color)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for f, old in zip(self._faces, self._old or []):
+            if old is None:
+                f.attrs.pop("color", None)
+            else:
+                f.attrs["color"] = list(old)
+        scene.version += 1
+
+
 def translate_points(scene, keys: set, delta: QVector3D) -> None:
     """Move every shared vertex whose position key is in ``keys`` by ``delta``.
 
