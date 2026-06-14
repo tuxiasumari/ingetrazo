@@ -9,7 +9,7 @@ from PySide6.QtGui import QVector3D
 
 from core.history import History, SetFaceColorCommand
 from core.group import Group
-from core.orient import orient_outward
+from core.orient import is_closed, orient_outward, signed_volume
 from core.scene import Scene
 from formats import obj as obj_format
 from formats import stl as stl_format
@@ -137,3 +137,42 @@ def test_obj_colours_become_materials(tmp_path):
     _verts, faces = _read_obj(path)
     used = {mat for mat, _ in faces}
     assert len(used) == 2                        # cream + red
+
+
+# ---- OBJ import (round-trip) ---------------------------------------------------
+
+def test_obj_round_trip_rebuilds_clean_solid(tmp_path):
+    # Export a cube (triangulated) and import it back: the coplanar merge fuses
+    # the triangles into 6 quads, the solid is watertight and outward-oriented.
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist)
+    path = tmp_path / "cube.obj"
+    obj_format.save_obj(scene, path)
+
+    loaded = Scene()
+    obj_format.load_obj(loaded, path)
+    m = loaded.mesh
+    assert len(m.faces) == 6 and len(m.vertices) == 8
+    assert is_closed(m)
+    assert abs(signed_volume(m) - 48.0) < 1e-6      # 4×4×3
+    assert orient_outward(m) == []                  # already consistent
+
+
+def test_obj_import_restores_colour(tmp_path):
+    scene = Scene()
+    hist = History(scene)
+    _cube(scene, hist)
+    top = next(f for f in scene.mesh.faces
+               if all(abs(v.z() - 3) < 1e-9 for v in f.vertices))
+    hist.execute(SetFaceColorCommand([top], (0.9, 0.1, 0.1)))
+    path = tmp_path / "painted.obj"
+    obj_format.save_obj(scene, path)
+
+    loaded = Scene()
+    obj_format.load_obj(loaded, path)
+    painted = [f for f in loaded.mesh.faces if f.attrs.get("color")]
+    assert len(painted) == 1
+    assert painted[0].attrs["color"] == [0.9, 0.1, 0.1]
+    # Unpainted faces stay unpainted (cream Kd is not stored as a colour).
+    assert sum(1 for f in loaded.mesh.faces if not f.attrs.get("color")) == 5

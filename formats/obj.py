@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QVector3D
+
 # Cream painted on faces with no material colour (mirrors the viewport default).
 _DEFAULT_COLOR = (0.92, 0.89, 0.81)
 
@@ -64,3 +66,81 @@ def save_obj(scene, path) -> None:
             o.write(f"usemtl {matname[c]}\n")
             for i, j, k in groups[c]:
                 o.write(f"f {i} {j} {k}\n")
+
+
+# ---- Import --------------------------------------------------------------------
+
+def _parse_mtl(path: Path) -> dict:
+    """Map material name → (r, g, b) from a ``.mtl`` file's ``Kd`` lines."""
+    colors: dict[str, tuple[float, float, float]] = {}
+    if not path.exists():
+        return colors
+    current = None
+    for line in path.read_text().splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        if parts[0] == "newmtl":
+            current = parts[1]
+        elif parts[0] == "Kd" and current is not None and len(parts) >= 4:
+            colors[current] = (float(parts[1]), float(parts[2]), float(parts[3]))
+    return colors
+
+
+def load_obj(scene, path) -> None:
+    """Add the faces of a Wavefront OBJ at ``path`` to ``scene``'s mesh, then
+    weld + merge coplanar so a triangulated file (e.g. our own export, or a
+    SketchUp OBJ) comes back as clean editable polygons. Material ``Kd`` colours
+    become per-face ``attrs["color"]`` (skipped when they match the default
+    cream, so plain faces stay unpainted). Adds to the current scene; the caller
+    wraps it for undo."""
+    from core.history import run_stitch
+    from core.orient import orient_outward
+    from core.topology import _key
+
+    path = Path(path)
+    verts: list[QVector3D] = []
+    materials: dict = {}
+    current_color = None
+    pending: list[tuple[list[QVector3D], object]] = []
+
+    for line in path.read_text().splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        tag = parts[0]
+        if tag == "v":
+            verts.append(QVector3D(float(parts[1]), float(parts[2]), float(parts[3])))
+        elif tag == "mtllib":
+            materials = _parse_mtl(path.with_name(parts[1]))
+        elif tag == "usemtl":
+            current_color = materials.get(parts[1])
+        elif tag == "f":
+            idxs = []
+            for tok in parts[1:]:
+                raw = int(tok.split("/")[0])
+                idxs.append(raw - 1 if raw > 0 else len(verts) + raw)
+            if len(idxs) >= 3 and all(0 <= i < len(verts) for i in idxs):
+                pending.append(([verts[i] for i in idxs], current_color))
+
+    seed: set = set()
+    new_faces = set()
+    for loop, color in pending:
+        try:
+            face = scene.mesh.add_face(loop)
+        except Exception:  # noqa: BLE001 — skip a degenerate polygon
+            continue
+        new_faces.add(face)
+        if color is not None and tuple(round(c, 4) for c in color) != tuple(
+                round(c, 4) for c in _DEFAULT_COLOR):
+            face.attrs["color"] = list(color)
+        for v in loop:
+            seed.add(_key(v))
+
+    # Weld coincident vertices and fuse the coplanar triangles back into the
+    # polygons they were exported from (a triangulated cube → 6 quads). The
+    # coplanar merge is winding-tolerant, so give a closed result a consistent
+    # outward orientation — what the engine and STL re-export expect.
+    run_stitch(scene.mesh, seed, new_faces, coplanar_merge=True)
+    orient_outward(scene.mesh)
+    scene.version += 1

@@ -33,6 +33,7 @@ from core.history import (
     HealOverlapsCommand,
     MakeGroupCommand,
     RebuildPlanarFacesCommand,
+    SnapshotMutation,
 )
 from core.mesh import Edge, Face
 from formats import igz as igz_format
@@ -291,6 +292,10 @@ class MainWindow(QMainWindow):
 
         actions.append(self._separator())
 
+        import_obj_action = QAction("Import OBJ…", self)
+        import_obj_action.triggered.connect(self._on_import_obj)
+        actions.append(import_obj_action)
+
         export_stl_action = QAction("Export STL…", self)
         export_stl_action.triggered.connect(self._on_export_stl)
         actions.append(export_stl_action)
@@ -532,6 +537,21 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._saved_version = self.viewport.scene.version
         self._update_title()
+
+    def _on_import_obj(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Import OBJ", "", "Wavefront OBJ (*.obj);;All files (*)")
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            self.viewport.history.execute(SnapshotMutation(
+                lambda scene: obj_format.load_obj(scene, path)))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Import OBJ failed", str(exc))
+            return
+        self.viewport.update()
+        self.statusBar().showMessage(f"Imported {path.name}", 3000)
 
     def _on_export_stl(self) -> None:
         self._export("STL", "stl", "STL mesh (*.stl)", stl_format.save_stl)
