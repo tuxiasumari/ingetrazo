@@ -12,7 +12,7 @@ import math
 from PySide6.QtGui import QVector3D
 
 from core.edits import build_add_edges
-from core.history import AddFaceCommand, CompoundCommand, SoftenEdgesCommand
+from core.history import AddFaceCommand
 from core.triangulate import plane_axes
 from tools.base import Tool, ToolContext
 
@@ -21,7 +21,6 @@ class _RadialTool(Tool):
     """Shared centre+radius regular-polygon tool. Subclasses set ``sides``."""
 
     sides: int = 24
-    soft_edges: bool = False  # True hides the segments so a curve reads smooth
     vcb_label = "Radio"
 
     def vcb_caption(self) -> str:
@@ -119,13 +118,11 @@ class _RadialTool(Tool):
     def _commit(self, viewport, pts: list[QVector3D]) -> None:
         n = len(pts)
         segments = [(pts[i], pts[(i + 1) % n]) for i in range(n)]
-        build = build_add_edges(
+        # The outline is drawn (a 24-segment circle reads round). What hides is
+        # only a *swept* curve's vertical facets — done by Push/Pull, not here.
+        cmd = build_add_edges(
             viewport.scene, segments, detect_faces=False,
             extra=[AddFaceCommand(list(pts))])
-        # A circle hides its segments (soft) so it reads as a smooth disc; a
-        # polygon keeps its sides visible.
-        cmd = (CompoundCommand([build, SoftenEdgesCommand(pts)])
-               if self.soft_edges else build)
         viewport.history.execute(cmd)
         self._reset()
         viewport.update()
@@ -139,11 +136,9 @@ class CircleTool(_RadialTool):
     name = "Circle"
     shortcut = "C"
     sides = 24
-    soft_edges = True   # the segments are hidden → smooth circle
 
 
 class PolygonTool(_RadialTool):
     name = "Polygon"
     shortcut = "G"   # P is taken by perspective toggle
     sides = 6
-    soft_edges = False  # a polygon shows its sides

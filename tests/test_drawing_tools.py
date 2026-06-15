@@ -148,7 +148,7 @@ def test_arc_commits_polyline_edges():
     tool.on_hover(_ctx(vp, V(2, 1, 0)))
     tool.on_click(_ctx(vp, V(2, 1, 0)))
     assert len(scene.mesh.edges) == 16           # _SEGMENTS edges
-    assert all(e.soft for e in scene.mesh.edges)  # an arc is a smooth curve
+    assert not any(e.soft for e in scene.mesh.edges)  # the drawn arc is visible
 
 
 def test_3point_arc_passes_through_all_three():
@@ -179,27 +179,21 @@ def test_typed_number_before_centre_sets_sides():
     assert len(scene.mesh.faces[0].vertices) == 8   # octagon
 
 
-def test_circle_edges_are_soft_polygon_edges_are_hard():
+def test_drawn_circle_outline_is_visible():
+    # A flat circle/polygon shows its outline (no edge is hidden); only a swept
+    # curve's facets are softened later, by Push/Pull.
     scene = Scene()
     vp = _VP(scene)
     c = CircleTool()
     c.on_click(_ctx(vp, V(0, 0, 0)))
     c.on_hover(_ctx(vp, V(2, 0, 0)))
     c.on_click(_ctx(vp, V(2, 0, 0)))
-    assert all(e.soft for e in scene.mesh.edges)     # circle hides its segments
-
-    scene2 = Scene()
-    vp2 = _VP(scene2)
-    p = PolygonTool()
-    p.on_click(_ctx(vp2, V(0, 0, 0)))
-    p.on_hover(_ctx(vp2, V(2, 0, 0)))
-    p.on_click(_ctx(vp2, V(2, 0, 0)))
-    assert not any(e.soft for e in scene2.mesh.edges)  # polygon shows its sides
+    assert not any(e.soft for e in scene.mesh.edges)   # the circle line stays
 
 
-def test_pushing_a_circle_makes_a_smooth_cylinder():
-    # A circle extruded should have every edge soft (smooth cylinder), while a
-    # polygon keeps hard edges (faceted prism).
+def test_pushed_circle_hides_facets_but_keeps_the_circle_line():
+    # A circle extruded: the vertical facet seams are soft (smooth side), but the
+    # top/bottom circle outline edges stay visible. A polygon keeps every edge.
     import tests.test_fuzz_engine as F
     scene = Scene()
     vp = _VP(scene)
@@ -209,7 +203,12 @@ def test_pushing_a_circle_makes_a_smooth_cylinder():
     c.on_click(_ctx(vp, V(2, 0, 0)))
     circ = next(f for f in scene.mesh.faces if len(f.vertices) == 24)
     F._push(scene, vp.history, circ, 3.0 if circ.normal().z() > 0 else -3.0)
-    assert scene.mesh.edges and all(e.soft for e in scene.mesh.edges)
+    soft = [e for e in scene.mesh.edges if e.soft]
+    hard = [e for e in scene.mesh.edges if not e.soft]
+    assert len(soft) == 24      # the 24 vertical facet seams are hidden
+    assert len(hard) == 48      # the top + bottom circle outlines stay visible
+    # the hidden ones are the vertical seams (run along Z)
+    assert all(abs((e.b - e.a).normalized().z()) > 0.99 for e in soft)
 
     scene2 = Scene()
     vp2 = _VP(scene2)
@@ -223,6 +222,7 @@ def test_pushing_a_circle_makes_a_smooth_cylinder():
 
 
 def test_soft_survives_snapshot_and_igz(tmp_path):
+    import tests.test_fuzz_engine as F
     from formats import igz
     scene = Scene()
     vp = _VP(scene)
@@ -230,13 +230,15 @@ def test_soft_survives_snapshot_and_igz(tmp_path):
     c.on_click(_ctx(vp, V(0, 0, 0)))
     c.on_hover(_ctx(vp, V(2, 0, 0)))
     c.on_click(_ctx(vp, V(2, 0, 0)))
-    # undo then redo keeps the soft flags (CompoundCommand re-softens on redo).
+    circ = next(f for f in scene.mesh.faces if len(f.vertices) == 24)
+    F._push(scene, vp.history, circ, 3.0 if circ.normal().z() > 0 else -3.0)
+    n_soft = sum(1 for e in scene.mesh.edges if e.soft)
+    assert n_soft == 24
     vp.history.undo()
     vp.history.redo()
-    assert all(e.soft for e in scene.mesh.edges)
-    # round-trip through .igz
-    path = tmp_path / "circle.igz"
+    assert sum(1 for e in scene.mesh.edges if e.soft) == n_soft
+    path = tmp_path / "cyl.igz"
     igz.save_scene(scene, path)
     loaded = Scene()
     igz.load_into(loaded, path)
-    assert all(e.soft for e in loaded.mesh.edges)
+    assert sum(1 for e in loaded.mesh.edges if e.soft) == n_soft

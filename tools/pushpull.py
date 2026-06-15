@@ -628,11 +628,7 @@ class PushPullTool(Tool):
         self._refused = False
         target = self._target_scene(scene)
         mesh = target.mesh
-        # Soft (curve) base edges (a circle/arc): remember their vertices so the
-        # swept walls and the far rim can be softened too — a circle extrudes
-        # into a *smooth* cylinder, not a faceted prism (SketchUp).
-        soft_keys = self._base_soft_vertex_keys(mesh)
-        before_edges = set(mesh.edges) if soft_keys else None
+        before_edges = set(mesh.edges)
         guard = (mesh.capture_state()
                  if is_closed(mesh) and not _mesh_is_flat(mesh) else None)
         self._mutate_inner(scene)
@@ -640,41 +636,25 @@ class PushPullTool(Tool):
             mesh.restore_state(guard)
             self._refused = True
             return
-        if soft_keys and self._normal is not None and self._anchor is not None:
-            self._soften_swept(mesh, before_edges, soft_keys)
+        self._soften_curve_facets(mesh, before_edges)
 
-    def _base_soft_vertex_keys(self, mesh) -> set:
-        """Position keys of the vertices on the base face's **soft** boundary
-        edges (a circle/arc base). Empty for a normal (hard-edged) face."""
-        face = self.base_face
-        if face is None:
-            return set()
-        keys: set = set()
-        for lp in (face.loop, *face.hole_loops):
-            n = len(lp)
-            for i in range(n):
-                e = mesh.find_edge(lp[i], lp[(i + 1) % n])
-                if e is not None and e.soft:
-                    keys.add(_key(e.a))
-                    keys.add(_key(e.b))
-        return keys
+    # The dihedral above which a swept seam reads as a *curve* facet (a
+    # cylinder's side) rather than a real corner. cos(31.8°): a 24-side circle
+    # (15° steps) softens, a hexagon/octagon (≥45°) keeps its visible edges.
+    _CURVE_FACET_COS = 0.85
 
-    def _soften_swept(self, mesh, before_edges, soft_keys: set) -> None:
-        """Mark every *new* edge whose both endpoints project (along the push
-        normal) onto the soft base curve as soft — the cylinder's vertical
-        facet edges and its far rim — so a circle extrudes to a smooth cylinder
-        instead of a visibly faceted prism."""
-        normal = self._normal.normalized()
-        origin = self._anchor
-
-        def proj_key(p):
-            flat = p - normal * QVector3D.dotProduct(p - origin, normal)
-            return _key(flat)
-
+    def _soften_curve_facets(self, mesh, before_edges) -> None:
+        """Hide the *new* edges between two faces that meet at a shallow dihedral
+        — the vertical facet seams of a swept curve — so a pushed circle reads as
+        a smooth cylinder while its circle outline (and a polygon's flat sides,
+        which meet at a real angle) stay visible. Topology-free: only the render
+        flag changes."""
         for e in mesh.edges:
-            if e in before_edges or e.soft:
+            if e in before_edges or e.soft or len(e.faces) != 2:
                 continue
-            if proj_key(e.a) in soft_keys and proj_key(e.b) in soft_keys:
+            d = QVector3D.dotProduct(e.faces[0].normal().normalized(),
+                                     e.faces[1].normal().normalized())
+            if self._CURVE_FACET_COS < d < 0.99995:
                 e.soft = True
 
     def _mutate_inner(self, scene) -> None:

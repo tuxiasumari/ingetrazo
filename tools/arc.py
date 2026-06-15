@@ -15,7 +15,6 @@ import math
 from PySide6.QtGui import QVector3D
 
 from core.edits import build_add_edges
-from core.history import CompoundCommand, SoftenEdgesCommand
 from core.triangulate import plane_axes
 from tools.base import Tool, ToolContext
 
@@ -174,11 +173,9 @@ class ArcTool(Tool):
 
     def _commit(self, viewport, pts: list[QVector3D]) -> None:
         segments = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
-        build = build_add_edges(viewport.scene, segments, detect_faces=True)
-        # An arc is a curve: hide its segments unless it's the degenerate
-        # straight chord (2 points), which is a real edge.
-        cmd = (CompoundCommand([build, SoftenEdgesCommand(pts)])
-               if len(pts) > 2 else build)
+        # The arc's segments are drawn (a 16-segment arc reads smooth); a
+        # *swept* arc's vertical facets are hidden later by Push/Pull.
+        cmd = build_add_edges(viewport.scene, segments, detect_faces=True)
         viewport.history.execute(cmd)
         self._reset()
         viewport.update()
@@ -260,9 +257,7 @@ class ThreePointArcTool(Tool):
 
     def _commit(self, viewport, pts: list[QVector3D]) -> None:
         segments = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
-        build = build_add_edges(viewport.scene, segments, detect_faces=True)
-        cmd = (CompoundCommand([build, SoftenEdgesCommand(pts)])
-               if len(pts) > 2 else build)
+        cmd = build_add_edges(viewport.scene, segments, detect_faces=True)
         viewport.history.execute(cmd)
         self._reset()
         viewport.update()
