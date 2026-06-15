@@ -1021,11 +1021,15 @@ class Viewport(QOpenGLWidget):
         dims = getattr(self.scene, "dimensions", None)
         if not dims:
             return
-        ink = QColor(45, 55, 75)
+        default_ink = QColor(45, 55, 75)
+        sel_ink = QColor(243, 115, 41)  # selection orange
+        selection = self.scene.selection
         font = QFont()
         font.setPointSize(9)
         font.setBold(True)
         for dim in dims:
+            ink = (sel_ink if (dim in selection or dim is self._hover_entity)
+                   else default_ink)
             ap, bp = dim.line_points()
             pa = self._world_to_pixel(dim.a)
             pb = self._world_to_pixel(dim.b)
@@ -1338,6 +1342,27 @@ class Viewport(QOpenGLWidget):
             if d < best_d:
                 best_d = d
                 best = edge
+        return best
+
+    def pick_dimension(self, screen_x: float, screen_y: float):
+        """Return the dimension whose lines (extension + dimension line) are
+        closest to the cursor within the pick threshold, or ``None``."""
+        dims = getattr(self.scene, "dimensions", None)
+        if not dims:
+            return None
+        best = None
+        best_d = self.pick_threshold_px
+        for dim in dims:
+            ap, bp = dim.line_points()
+            for s, e in ((dim.a, ap), (dim.b, bp), (ap, bp)):
+                ps = self._world_to_pixel(s)
+                pe = self._world_to_pixel(e)
+                if ps is None or pe is None:
+                    continue
+                d = _point_to_segment_distance_2d((screen_x, screen_y), ps, pe)
+                if d < best_d:
+                    best_d = d
+                    best = dim
         return best
 
     def pick_vertex(self, screen_x: float, screen_y: float):

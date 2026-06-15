@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
+from core.dimension import Dimension
 from core.group import Group
 from core.mesh import Edge, Face
 from core.history import (
     CompoundCommand,
+    DeleteDimensionsCommand,
     DeleteGroupCommand,
     EraseSelectionCommand,
 )
@@ -62,14 +64,18 @@ class SelectTool(Tool):
         viewport.set_hover(None)
 
     def _pick(self, viewport, screen_x: float, screen_y: float):
-        """A group (picked as a unit) takes priority; else the edge under the
-        cursor (screen-space priority), else the front face."""
+        """A group (picked as a unit) takes priority; then the edge under the
+        cursor (screen-space priority), then a dimension annotation, then the
+        front face."""
         group = viewport.pick_group(screen_x, screen_y)
         if group is not None:
             return group
         edge = viewport.pick_edge(screen_x, screen_y)
         if edge is not None:
             return edge
+        dim = viewport.pick_dimension(screen_x, screen_y)
+        if dim is not None:
+            return dim
         return viewport.pick_face(screen_x, screen_y)
 
     def on_click(self, ctx: ToolContext) -> None:
@@ -113,6 +119,16 @@ class SelectTool(Tool):
                     picked.append(face)
             elif all(_pt_in_rect(p, rect) for p in pts):
                 picked.append(face)
+        for dim in getattr(viewport.scene, "dimensions", []):
+            ap, bp = dim.line_points()
+            pa, pb = w2p(ap), w2p(bp)
+            if pa is None or pb is None:
+                continue
+            if crossing:
+                if _seg_rect_overlap(pa, pb, rect):
+                    picked.append(dim)
+            elif _pt_in_rect(pa, rect) and _pt_in_rect(pb, rect):
+                picked.append(dim)
         viewport.scene.select(picked, additive=additive)
         viewport.update()
 
@@ -123,12 +139,15 @@ class SelectTool(Tool):
                 edges = [e for e in selection if isinstance(e, Edge)]
                 faces = [f for f in selection if isinstance(f, Face)]
                 groups = [g for g in selection if isinstance(g, Group)]
+                dims = [d for d in selection if isinstance(d, Dimension)]
                 commands = []
                 if edges or faces:
                     # Erasing an edge between two coplanar faces merges them back
                     # into one (SketchUp); any other erased edge takes its faces.
                     commands.append(EraseSelectionCommand(edges, faces))
                 commands.extend(DeleteGroupCommand(g) for g in groups)
+                if dims:
+                    commands.append(DeleteDimensionsCommand(dims))
                 if commands:
                     cmd = (commands[0] if len(commands) == 1
                            else CompoundCommand(commands))

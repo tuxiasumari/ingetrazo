@@ -119,3 +119,23 @@ def test_dimension_survives_igz_round_trip(tmp_path):
     d = loaded.dimensions[0]
     assert d.a == V(0, 0, 0) and d.b == V(4, 0, 0) and d.offset == V(0, 0, 2)
     assert d.value() == 4.0
+
+
+# ---- Select + delete -----------------------------------------------------------
+
+def test_select_tool_deletes_a_dimension():
+    from tools.select import SelectTool
+
+    scene = Scene()
+    vp = _StubVP(scene)
+    d = Dimension(V(0, 0, 0), V(4, 0, 0), V(0, 0, 2))
+    vp.history.execute(AddDimensionCommand(d))
+    scene.selection.add(d)
+
+    tool = SelectTool()
+    tool.on_key(vp, Qt.Key_Delete, Qt.NoModifier)
+    assert d not in scene.dimensions
+    assert d not in scene.selection          # selection cleared of the deleted dim
+
+    vp.history.undo()
+    assert d in scene.dimensions             # undo brings it back

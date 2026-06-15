@@ -414,6 +414,7 @@ class DeleteDimensionsCommand(Command):
         for d in self._dims:
             if d in scene.dimensions:
                 scene.dimensions.remove(d)
+            scene.selection.discard(d)
         scene.version += 1
 
     def undo(self, scene) -> None:
