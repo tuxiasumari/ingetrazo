@@ -133,7 +133,8 @@ Move (M) con snap/inferencia/VCB + copia con Ctrl; Eraser (E) por click y arrast
 **FASE 4 — Kit de dibujo completo** *(casi completo)*
 Circle (C), Arc (A), Offset (F), Tape Measure + guías (T). Usar `tool.work_plane` + `plane_axes` (ver `[[project-face-plane-inference-done]]`).
 - ✅ **Offset (F)** hecho (`tools/offset.py` + `offset_loop`; push del anillo levanta muros con espesor).
-- ✅ **Circle (C) + Polygon (G) + Rotated Rect (K) + Arc (A) HECHO (2026-06-14).** `tools/circle.py` (`_RadialTool` base: centro+radio → N-gon con un vértice hacia el cursor, VCB radio; `CircleTool` 24 lados, `PolygonTool` 6), `tools/rotated_rectangle.py` (3 clics: esquina→arista base→ancho perpendicular, VCB ancho), `tools/arc.py` (2 puntos + bulge: circumcentro 2D del cordón+ápice, polilínea de 16 segmentos, auto-face si cierra; recto si bulge≈0). Todos sobre `work_plane` vía `plane_axes`, rubber-band + value_label. 8 tests en `tests/test_drawing_tools.py`. Verificado visualmente. **Falta:** Tape Measure + guías.
+- ✅ **Circle (C) + Polygon (G) + Rotated Rect (K) + Arc (A) + 3-Point Arc (J) HECHO (2026-06-14).** `tools/circle.py` (`_RadialTool` base: centro+radio → N-gon con un vértice hacia el cursor, VCB radio; **nº de lados = número tipeado ANTES del centro**, estilo SketchUp; `CircleTool` 24, `PolygonTool` 6), `tools/rotated_rectangle.py` (3 clics: esquina→arista base→ancho, VCB ancho), `tools/arc.py` (`ArcTool` 2 puntos+bulge, `ThreePointArcTool` 3 puntos por los que pasa el arco; circumcentro 2D, polilínea 16 seg, auto-face si cierra). Todos sobre `work_plane` vía `plane_axes`, rubber-band + value_label.
+  - **Aristas soft (curva limpia):** `Edge.soft` (slot nuevo, en capture/restore + `.igz`); el render del viewport **omite** las aristas soft → un **círculo se ve como disco liso** sin las líneas de los segmentos (SketchUp). `SoftenEdgesCommand` (marca soft por posición, undo-correcto, compuesto tras el build). Círculo y arcos marcan soft; **polígono NO** (muestra sus lados). 12 tests en `tests/test_drawing_tools.py`. Verificado visualmente. **Limitación conocida:** push/pull de un círculo crea aristas verticales **no-soft** → cilindro facetado (el disco plano sí queda limpio); propagar soft por el push/pull es un follow-up. **Falta también:** Tape Measure + guías.
 - **DoD:** círculos, arcos, paralelas y guías sobre cualquier cara. *(círculos/arcos/paralelas ✅; falta Tape Measure + guías.)*
 
 **✅ FASE 5 — Groups v1** *(hecho 2026-06-08; era la deuda estructural contra la geometría pegajosa)*
@@ -430,7 +431,7 @@ ingetrazo/                     ← nombre lógico del proyecto; carpeta en disco
 │   ├── rectangle.py           ← RectangleTool (4 edges + 1 face CompoundCommand)
 │   ├── rotated_rectangle.py   ← RotatedRectangleTool (K) — rect en ángulo (3 clics)
 │   ├── circle.py              ← CircleTool (C) + PolygonTool (G) — N-gon centro+radio
-│   ├── arc.py                 ← ArcTool (A) — 2 puntos + bulge → polilínea
+│   ├── arc.py                 ← ArcTool (A, 2pt+bulge) + ThreePointArcTool (J) — polilínea soft
 │   ├── move.py                ← MoveTool (mueve posiciones o un grupo entero; snap/VCB/axis magnético)
 │   ├── offset.py              ← OffsetTool (F) — offset de cara → anillo + cara interna (muros con espesor)
 │   ├── paste.py               ← PasteTool — pega el clipboard siguiendo el cursor

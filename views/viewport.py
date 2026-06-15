@@ -679,6 +679,8 @@ class Viewport(QOpenGLWidget):
 
         all_data = array("f")
         for e in self.scene.render_edges():
+            if getattr(e, "soft", False):
+                continue  # curve segment (circle/arc) — hidden so it reads smooth
             all_data.extend([
                 e.a.x(), e.a.y(), e.a.z(),
                 e.b.x(), e.b.y(), e.b.z(),

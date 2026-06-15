@@ -31,7 +31,7 @@ from core.mesh import Edge, Face
 from formats import igz as igz_format
 from formats import obj as obj_format
 from formats import stl as stl_format
-from tools.arc import ArcTool
+from tools.arc import ArcTool, ThreePointArcTool
 from tools.circle import CircleTool, PolygonTool
 from tools.dimension import DimensionTool
 from tools.line import LineTool
@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
             "circle": CircleTool(),
             "polygon": PolygonTool(),
             "arc": ArcTool(),
+            "arc3": ThreePointArcTool(),
             "pushpull": PushPullTool(),
             "offset": OffsetTool(),
             "move": MoveTool(),

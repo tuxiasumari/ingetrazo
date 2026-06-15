@@ -52,10 +52,17 @@ def _face_json(f) -> dict:
     return entry
 
 
+def _edge_json(e) -> dict:
+    entry = {"a": [e.a.x(), e.a.y(), e.a.z()],
+             "b": [e.b.x(), e.b.y(), e.b.z()]}
+    if getattr(e, "soft", False):
+        entry["soft"] = True
+    return entry
+
+
 def _mesh_json(mesh) -> dict:
     return {
-        "edges": [{"a": [e.a.x(), e.a.y(), e.a.z()],
-                   "b": [e.b.x(), e.b.y(), e.b.z()]} for e in mesh.edges],
+        "edges": [_edge_json(e) for e in mesh.edges],
         "faces": [_face_json(f) for f in mesh.faces],
     }
 
@@ -122,7 +129,9 @@ def load_into(scene, path: Path) -> None:
 def _load_mesh(mesh, payload) -> None:
     for raw in payload.get("edges", []):
         try:
-            mesh.add_edge(QVector3D(*raw["a"]), QVector3D(*raw["b"]))
+            edge = mesh.add_edge(QVector3D(*raw["a"]), QVector3D(*raw["b"]))
+            if raw.get("soft"):
+                edge.soft = True
         except ValueError:
             pass  # degenerate edge in the document — skip
     for raw in payload.get("faces", []):

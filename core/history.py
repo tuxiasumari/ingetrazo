@@ -423,6 +423,31 @@ class DeleteDimensionsCommand(Command):
         scene.version += 1
 
 
+class SoftenEdgesCommand(Command):
+    """Mark every edge whose both endpoints lie on a given point set as **soft**
+    — a curve segment (circle/arc) that the viewport hides so the curve reads
+    smooth, SketchUp-style. Composed after the edge-build command (the edges must
+    exist first). Undo restores each touched edge's hardness."""
+
+    def __init__(self, points) -> None:
+        self._keys = {_key(p) for p in points}
+        self._changed: list = []
+
+    def do(self, scene) -> None:
+        self._changed = []
+        for e in scene.mesh.edges:
+            if (not e.soft and _key(e.a) in self._keys
+                    and _key(e.b) in self._keys):
+                e.soft = True
+                self._changed.append(e)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for e in self._changed:
+            e.soft = False
+        scene.version += 1
+
+
 class SetFaceTextureCommand(Command):
     """Apply an image texture (``{"path","sw","sh"}``) to a set of faces, or
     clear it with ``None`` — stored in each face's ``attrs["texture"]`` (rides

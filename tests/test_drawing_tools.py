@@ -8,7 +8,7 @@ from PySide6.QtGui import QVector3D
 
 from core.history import History
 from core.scene import Scene
-from tools.arc import ArcTool
+from tools.arc import ArcTool, ThreePointArcTool
 from tools.base import ToolContext
 from tools.circle import CircleTool, PolygonTool
 from tools.rotated_rectangle import RotatedRectangleTool
@@ -24,6 +24,9 @@ class _VP:
         self.history = History(scene)
 
     def update(self):
+        pass
+
+    def flash_status(self, text, msec=2500):
         pass
 
 
@@ -145,3 +148,70 @@ def test_arc_commits_polyline_edges():
     tool.on_hover(_ctx(vp, V(2, 1, 0)))
     tool.on_click(_ctx(vp, V(2, 1, 0)))
     assert len(scene.mesh.edges) == 16           # _SEGMENTS edges
+    assert all(e.soft for e in scene.mesh.edges)  # an arc is a smooth curve
+
+
+def test_3point_arc_passes_through_all_three():
+    scene = Scene()
+    vp = _VP(scene)
+    tool = ThreePointArcTool()
+    tool.on_click(_ctx(vp, V(0, 0, 0)))          # start
+    tool.on_click(_ctx(vp, V(2, 2, 0)))          # through
+    tool.on_hover(_ctx(vp, V(4, 0, 0)))
+    pts = tool._points(V(4, 0, 0))
+    assert (pts[0] - V(0, 0, 0)).length() < 1e-6
+    assert (pts[-1] - V(4, 0, 0)).length() < 1e-6
+    # the arc passes through the mid point (some sample lands on it)
+    assert any((p - V(2, 2, 0)).length() < 1e-4 for p in pts)
+
+
+# ---- Side count + soft (clean) edges ------------------------------------------
+
+def test_typed_number_before_centre_sets_sides():
+    scene = Scene()
+    vp = _VP(scene)
+    tool = PolygonTool()
+    assert tool.on_value(vp, 8.0) is True        # 8 sides, before any click
+    assert tool.sides == 8
+    tool.on_click(_ctx(vp, V(0, 0, 0)))
+    tool.on_hover(_ctx(vp, V(2, 0, 0)))
+    tool.on_click(_ctx(vp, V(2, 0, 0)))
+    assert len(scene.mesh.faces[0].vertices) == 8   # octagon
+
+
+def test_circle_edges_are_soft_polygon_edges_are_hard():
+    scene = Scene()
+    vp = _VP(scene)
+    c = CircleTool()
+    c.on_click(_ctx(vp, V(0, 0, 0)))
+    c.on_hover(_ctx(vp, V(2, 0, 0)))
+    c.on_click(_ctx(vp, V(2, 0, 0)))
+    assert all(e.soft for e in scene.mesh.edges)     # circle hides its segments
+
+    scene2 = Scene()
+    vp2 = _VP(scene2)
+    p = PolygonTool()
+    p.on_click(_ctx(vp2, V(0, 0, 0)))
+    p.on_hover(_ctx(vp2, V(2, 0, 0)))
+    p.on_click(_ctx(vp2, V(2, 0, 0)))
+    assert not any(e.soft for e in scene2.mesh.edges)  # polygon shows its sides
+
+
+def test_soft_survives_snapshot_and_igz(tmp_path):
+    from formats import igz
+    scene = Scene()
+    vp = _VP(scene)
+    c = CircleTool()
+    c.on_click(_ctx(vp, V(0, 0, 0)))
+    c.on_hover(_ctx(vp, V(2, 0, 0)))
+    c.on_click(_ctx(vp, V(2, 0, 0)))
+    # undo then redo keeps the soft flags (CompoundCommand re-softens on redo).
+    vp.history.undo()
+    vp.history.redo()
+    assert all(e.soft for e in scene.mesh.edges)
+    # round-trip through .igz
+    path = tmp_path / "circle.igz"
+    igz.save_scene(scene, path)
+    loaded = Scene()
+    igz.load_into(loaded, path)
+    assert all(e.soft for e in loaded.mesh.edges)

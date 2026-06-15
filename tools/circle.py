@@ -12,7 +12,7 @@ import math
 from PySide6.QtGui import QVector3D
 
 from core.edits import build_add_edges
-from core.history import AddFaceCommand
+from core.history import AddFaceCommand, CompoundCommand, SoftenEdgesCommand
 from core.triangulate import plane_axes
 from tools.base import Tool, ToolContext
 
@@ -21,6 +21,7 @@ class _RadialTool(Tool):
     """Shared centre+radius regular-polygon tool. Subclasses set ``sides``."""
 
     sides: int = 24
+    soft_edges: bool = False  # True hides the segments so a curve reads smooth
     vcb_label = "Radius"
 
     def __init__(self) -> None:
@@ -50,10 +51,18 @@ class _RadialTool(Tool):
         ctx.viewport.update()
 
     def on_value(self, viewport, value) -> bool:
-        """Type the radius + Enter."""
-        if self.start_point is None or self.hover_point is None:
+        """Before the centre is placed, a typed number sets the **side count**
+        (SketchUp: type sides + Enter); after it, the number is the **radius**."""
+        if isinstance(value, tuple):
             return False
-        if isinstance(value, tuple) or value <= 0.0:
+        if self.start_point is None:
+            n = int(round(value))
+            if n >= 3:
+                self.sides = n
+                viewport.flash_status(f"{n} lados")
+                return True
+            return False
+        if self.hover_point is None or value <= 0.0:
             return False
         # Keep the cursor's direction, override only the radius.
         u, v = self._axes()
@@ -81,7 +90,7 @@ class _RadialTool(Tool):
         if self.start_point is None or self.hover_point is None:
             return None
         r = (self.hover_point - self.start_point).length()
-        return (f"R {r:.2f} m", self.hover_point)
+        return (f"R {r:.2f} m  ({self.sides} lados)", self.hover_point)
 
     # ---- Internals ----------------------------------------------------------
     def _axes(self) -> tuple[QVector3D, QVector3D]:
@@ -106,9 +115,13 @@ class _RadialTool(Tool):
     def _commit(self, viewport, pts: list[QVector3D]) -> None:
         n = len(pts)
         segments = [(pts[i], pts[(i + 1) % n]) for i in range(n)]
-        cmd = build_add_edges(
+        build = build_add_edges(
             viewport.scene, segments, detect_faces=False,
             extra=[AddFaceCommand(list(pts))])
+        # A circle hides its segments (soft) so it reads as a smooth disc; a
+        # polygon keeps its sides visible.
+        cmd = (CompoundCommand([build, SoftenEdgesCommand(pts)])
+               if self.soft_edges else build)
         viewport.history.execute(cmd)
         self._reset()
         viewport.update()
@@ -122,9 +135,11 @@ class CircleTool(_RadialTool):
     name = "Circle"
     shortcut = "C"
     sides = 24
+    soft_edges = True   # the segments are hidden → smooth circle
 
 
 class PolygonTool(_RadialTool):
     name = "Polygon"
     shortcut = "G"   # P is taken by perspective toggle
     sides = 6
+    soft_edges = False  # a polygon shows its sides

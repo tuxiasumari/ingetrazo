@@ -76,12 +76,15 @@ class Edge:
     architecture). Maintained by the mesh.
     """
 
-    __slots__ = ("v0", "v1", "faces")
+    __slots__ = ("v0", "v1", "faces", "soft")
 
     def __init__(self, v0: Vertex, v1: Vertex) -> None:
         self.v0 = v0
         self.v1 = v1
         self.faces: list[Face] = []
+        # A "soft" edge is a curve segment (circle/arc): kept in the topology but
+        # hidden from the edge render, so the curve reads smooth, SketchUp-style.
+        self.soft: bool = False
 
     # Position accessors keep parity with the legacy ``Edge.a`` / ``Edge.b`` so
     # read-only consumers (render, bounds) port with minimal churn.
@@ -381,6 +384,7 @@ class Mesh:
             "vpos": {v: QVector3D(v.position) for v in self.vertices},
             "vedges": {v: set(v.edges) for v in self.vertices},
             "efaces": {e: list(e.faces) for e in self.edges},
+            "esoft": {e: e.soft for e in self.edges},
             "floop": {f: list(f.loop) for f in self.faces},
             "fholes": {f: [list(h) for h in f.hole_loops] for f in self.faces},
             "fattrs": {f: dict(f.attrs) for f in self.faces},
@@ -400,6 +404,8 @@ class Mesh:
             v.edges = set(es)
         for e, fs in snap["efaces"].items():
             e.faces = list(fs)
+        for e, soft in snap.get("esoft", {}).items():
+            e.soft = soft
         for f, loop in snap["floop"].items():
             f.loop = list(loop)
         for f, holes in snap["fholes"].items():
