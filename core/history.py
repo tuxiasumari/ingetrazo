@@ -220,6 +220,13 @@ class EraseSelectionCommand(Command):
                     scene.selection.discard(f)
                 m.remove_edge(edge)
             scene.selection.discard(edge)
+        # Deleting a curved surface takes its hidden seams with it: a soft edge
+        # left bordering no face is a dangling curve segment (a cylinder side's
+        # vertical seam) — prune it so no stray vertical lines remain. Hard
+        # orphan edges stay (an erased flat face keeps its outline, SketchUp).
+        for e in list(m.edges):
+            if e.soft and not e.faces:
+                m.remove_edge(e)
         # A merge can leave the big enclosing face overlapping its subdivisions;
         # drop any such redundant mother (covered by the snapshot undo above).
         for f in heal_overlapping_faces(m):

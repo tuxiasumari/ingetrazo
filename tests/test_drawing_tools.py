@@ -239,6 +239,29 @@ def test_cylinder_side_is_one_surface():
     assert len(scene.mesh.surface_of(cap)) == 1      # a cap is its own surface
 
 
+def test_deleting_cylinder_side_leaves_no_dangling_seams():
+    # Erasing the curved side surface prunes its hidden vertical seams — no stray
+    # vertical lines remain, just the two cap circles.
+    import tests.test_fuzz_engine as F
+    from core.history import EraseSelectionCommand
+    scene = Scene()
+    vp = _VP(scene)
+    c = CircleTool()
+    c.on_click(_ctx(vp, V(0, 0, 0)))
+    c.on_hover(_ctx(vp, V(2, 0, 0)))
+    c.on_click(_ctx(vp, V(2, 0, 0)))
+    circ = next(f for f in scene.mesh.faces if len(f.vertices) == 24)
+    F._push(scene, vp.history, circ, 3.0 if circ.normal().z() > 0 else -3.0)
+    side = next(f for f in scene.mesh.faces if len(f.vertices) == 4)
+    surface = scene.mesh.surface_of(side)
+
+    vp.history.execute(EraseSelectionCommand([], surface))
+    assert len(scene.mesh.faces) == 2                       # the two caps remain
+    assert not any(e.soft and not e.faces for e in scene.mesh.edges)  # no dangle
+    vp.history.undo()
+    assert len(scene.mesh.faces) == 26                      # restored
+
+
 def test_box_face_is_its_own_surface():
     import tests.test_fuzz_engine as F
     scene = Scene()

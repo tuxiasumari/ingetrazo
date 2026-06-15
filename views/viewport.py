@@ -862,8 +862,10 @@ class Viewport(QOpenGLWidget):
             if not getattr(e, "soft", False):
                 continue
             faces = e.faces
-            silhouette = len(faces) < 2
-            if not silhouette and len(faces) == 2:
+            # A 1-face soft edge is an open-surface boundary (a real profile); a
+            # 0-face one is a dangling line (not drawn here).
+            silhouette = len(faces) == 1
+            if len(faces) == 2:
                 s0 = QVector3D.dotProduct(faces[0].normal(),
                                           faces[0].centroid() - eye)
                 s1 = QVector3D.dotProduct(faces[1].normal(),
