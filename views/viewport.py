@@ -366,6 +366,7 @@ class Viewport(QOpenGLWidget):
         self._tex_faces_vao, self._tex_faces_vbo = self._create_dynamic_uv()
         self._hover_faces_vao, self._hover_faces_vbo = self._create_dynamic()
         self._hover_edges_vao, self._hover_edges_vbo = self._create_dynamic()
+        self._silhouette_vao, self._silhouette_vbo = self._create_dynamic()
         self._rubber_vao, self._rubber_vbo = self._create_dynamic()
         self._preview_faces_vao, self._preview_faces_vbo = self._create_dynamic()
 
@@ -520,6 +521,16 @@ class Viewport(QOpenGLWidget):
             self._edges_vao.bind()
             self._gl.glDrawArrays(GL_LINES, 0, self._edges_count)
             self._edges_vao.release()
+
+        # Profile (silhouette) edges: soft seams of a curved surface are hidden,
+        # except where the surface turns away from the viewer — the cylinder's
+        # outline. View-dependent, so rebuilt every frame, SketchUp-style.
+        sil_count = self._upload_silhouette_edges()
+        if sil_count > 0:
+            self._set_color(0.13, 0.17, 0.23, 1.0)
+            self._silhouette_vao.bind()
+            self._gl.glDrawArrays(GL_LINES, 0, sil_count)
+            self._silhouette_vao.release()
 
         # Selected edges (drawn on top, highlighted)
         if self._selected_count > 0:
@@ -836,6 +847,38 @@ class Viewport(QOpenGLWidget):
         else:
             self._hover_faces_vbo.allocate(24)
         self._hover_faces_vbo.release()
+        return len(data) // 3
+
+    def _upload_silhouette_edges(self) -> int:
+        """Upload the *profile* edges into the silhouette VBO and return the
+        vertex count. A soft (hidden) edge is drawn when it lies on the
+        silhouette — its two faces straddle the view, one turned toward the
+        camera and one away — so a curved surface shows its outline. A soft
+        edge with a single face is always a profile (a boundary). View-dependent,
+        called each frame."""
+        eye = self.camera.eye()
+        data = array("f")
+        for e in self.scene.render_edges():
+            if not getattr(e, "soft", False):
+                continue
+            faces = e.faces
+            silhouette = len(faces) < 2
+            if not silhouette and len(faces) == 2:
+                s0 = QVector3D.dotProduct(faces[0].normal(),
+                                          faces[0].centroid() - eye)
+                s1 = QVector3D.dotProduct(faces[1].normal(),
+                                          faces[1].centroid() - eye)
+                silhouette = (s0 < 0) != (s1 < 0)
+            if silhouette:
+                data.extend([e.a.x(), e.a.y(), e.a.z(),
+                             e.b.x(), e.b.y(), e.b.z()])
+        self._silhouette_vbo.bind()
+        if data:
+            raw = data.tobytes()
+            self._silhouette_vbo.allocate(raw, len(raw))
+        else:
+            self._silhouette_vbo.allocate(24)
+        self._silhouette_vbo.release()
         return len(data) // 3
 
     def _upload_hover_edge(self, edge: Edge) -> None:

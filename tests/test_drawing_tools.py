@@ -221,6 +221,35 @@ def test_pushed_circle_hides_facets_but_keeps_the_circle_line():
     assert not any(e.soft for e in scene2.mesh.edges)  # hexagonal prism stays hard
 
 
+def test_cylinder_side_is_one_surface():
+    # Clicking a side quad of a cylinder should act on the whole curved surface
+    # (24 quads joined by soft edges), while the caps (hard-edged) stay separate.
+    import tests.test_fuzz_engine as F
+    scene = Scene()
+    vp = _VP(scene)
+    c = CircleTool()
+    c.on_click(_ctx(vp, V(0, 0, 0)))
+    c.on_hover(_ctx(vp, V(2, 0, 0)))
+    c.on_click(_ctx(vp, V(2, 0, 0)))
+    circ = next(f for f in scene.mesh.faces if len(f.vertices) == 24)
+    F._push(scene, vp.history, circ, 3.0 if circ.normal().z() > 0 else -3.0)
+    side = next(f for f in scene.mesh.faces if len(f.vertices) == 4)
+    assert len(scene.mesh.surface_of(side)) == 24    # whole curved side
+    cap = next(f for f in scene.mesh.faces if len(f.vertices) == 24)
+    assert len(scene.mesh.surface_of(cap)) == 1      # a cap is its own surface
+
+
+def test_box_face_is_its_own_surface():
+    import tests.test_fuzz_engine as F
+    scene = Scene()
+    hist = History(scene)
+    F._draw_rect(scene, hist, [V(0, 0), V(4, 0), V(4, 4), V(0, 4)], [])
+    f = scene.mesh.faces[0]
+    F._push(scene, hist, f, 3.0 if f.normal().z() > 0 else -3.0)
+    for face in scene.mesh.faces:
+        assert scene.mesh.surface_of(face) == [face]  # no soft edges anywhere
+
+
 def test_soft_survives_snapshot_and_igz(tmp_path):
     import tests.test_fuzz_engine as F
     from formats import igz

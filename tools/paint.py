@@ -71,9 +71,11 @@ class PaintTool(Tool):
             return
 
         # Paint the clicked face — or, if it is part of the current face
-        # selection, the whole selection in one undoable step.
+        # selection, the whole selection. A face on a curved surface (cylinder
+        # side) paints the whole surface, SketchUp-style.
         sel_faces = [e for e in vp.scene.selection if isinstance(e, Face)]
-        faces = sel_faces if face in sel_faces else [face]
+        faces = (sel_faces if face in sel_faces
+                 else vp.scene.mesh.surface_of(face))
         if PaintTool.current_texture is not None:
             vp.history.execute(
                 SetFaceTextureCommand(faces, PaintTool.current_texture))

@@ -308,6 +308,28 @@ class Mesh:
         self.faces.append(face)
         return face
 
+    def surface_of(self, face: "Face") -> list:
+        """The faces forming the same **curved surface** as ``face`` — the
+        connected component reached by crossing **soft** edges (a circle/arc
+        sweep's hidden seams). SketchUp groups faces joined by softened edges
+        into one surface, so clicking/painting one acts on the whole curved
+        side. Returns just ``[face]`` for ordinary (hard-edged) geometry."""
+        seen = {face}
+        stack = [face]
+        while stack:
+            f = stack.pop()
+            for lp in (f.loop, *f.hole_loops):
+                n = len(lp)
+                for i in range(n):
+                    e = self.find_edge(lp[i], lp[(i + 1) % n])
+                    if e is None or not e.soft:
+                        continue
+                    for g in e.faces:
+                        if g is not f and g not in seen:
+                            seen.add(g)
+                            stack.append(g)
+        return list(seen)
+
     def remove_face(self, face: Face) -> None:
         """Drop a face and detach it from its boundary edges' radial lists. The
         edges themselves stay (they may border other faces or stand alone)."""

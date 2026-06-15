@@ -86,7 +86,11 @@ class SelectTool(Tool):
             if not additive:
                 viewport.scene.clear_selection()
         else:
-            viewport.scene.select([entity], additive=additive)
+            # A face on a curved surface (a cylinder's side) selects as the whole
+            # surface — every face joined to it by soft edges, SketchUp-style.
+            picked = (viewport.scene.mesh.surface_of(entity)
+                      if isinstance(entity, Face) else [entity])
+            viewport.scene.select(picked, additive=additive)
         viewport.update()
 
     def on_hover(self, ctx: ToolContext) -> None:
