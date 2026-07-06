@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
+from core.i18n import available_languages, current_language, set_language, tr
 from core.group import Group
 from core.history import (
     ExplodeGroupCommand,
@@ -103,7 +104,7 @@ class MainWindow(QMainWindow):
             lambda _v: self.tray.on_scene_changed())
 
     def _build_toolbar(self) -> None:
-        toolbar = QToolBar("Main", self)
+        toolbar = QToolBar(tr("Main"), self)
         toolbar.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
 
@@ -111,7 +112,8 @@ class MainWindow(QMainWindow):
         self._tool_group.setExclusive(True)
 
         for key, tool in self._tools.items():
-            label = f"{tool.name} ({tool.shortcut})" if tool.shortcut else tool.name
+            name = tr(tool.name)
+            label = f"{name} ({tool.shortcut})" if tool.shortcut else name
             action = QAction(label, self)
             action.setCheckable(True)
             if tool.shortcut:
@@ -124,7 +126,7 @@ class MainWindow(QMainWindow):
         # Spacebar returns to Select, like SketchUp's pointer. Keep "S" too.
         select_action = self._tool_actions["select"]
         select_action.setShortcuts([QKeySequence("S"), QKeySequence(Qt.Key_Space)])
-        select_action.setToolTip("Select (Space / S)")
+        select_action.setToolTip(tr("Select (Space / S)"))
 
         # Camera-navigation buttons (SketchUp Orbit / Pan). Essential on a
         # trackpad with no middle mouse button: click one, then left-drag to
@@ -136,10 +138,10 @@ class MainWindow(QMainWindow):
             ("orbit", "Orbit", "O", "Orbit (O) — left-drag to rotate the view"),
             ("pan", "Pan", "H", "Pan (H) — left-drag to slide the view"),
         ]:
-            action = QAction(f"{label} ({short})", self)
+            action = QAction(f"{tr(label)} ({short})", self)
             action.setCheckable(True)
             action.setShortcut(QKeySequence(short))
-            action.setToolTip(tip)
+            action.setToolTip(tr(tip))
             action.triggered.connect(lambda _checked, k=key: self._activate_nav(k))
             self._tool_group.addAction(action)
             toolbar.addAction(action)
@@ -150,19 +152,19 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
 
         # File menu
-        file_menu = menubar.addMenu("File")
+        file_menu = menubar.addMenu(tr("File"))
         for action in self._file_actions():
             file_menu.addAction(action)
 
         # Edit menu
-        edit_menu = menubar.addMenu("Edit")
+        edit_menu = menubar.addMenu(tr("Edit"))
 
-        self._undo_action = QAction("Undo", self)
+        self._undo_action = QAction(tr("Undo"), self)
         self._undo_action.setShortcut(QKeySequence.Undo)
         self._undo_action.triggered.connect(self._on_undo)
         edit_menu.addAction(self._undo_action)
 
-        self._redo_action = QAction("Redo", self)
+        self._redo_action = QAction(tr("Redo"), self)
         # Cover both classic Windows (Ctrl+Y) and Linux/macOS (Ctrl+Shift+Z).
         self._redo_action.setShortcuts(
             [QKeySequence.Redo, QKeySequence("Ctrl+Shift+Z")]
@@ -172,64 +174,64 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
-        copy_action = QAction("Copy", self)
+        copy_action = QAction(tr("Copy"), self)
         copy_action.setShortcut(QKeySequence.Copy)
         copy_action.triggered.connect(lambda: self.viewport.copy_selection())
         edit_menu.addAction(copy_action)
 
-        cut_action = QAction("Cut", self)
+        cut_action = QAction(tr("Cut"), self)
         cut_action.setShortcut(QKeySequence.Cut)
         cut_action.triggered.connect(lambda: self.viewport.cut_selection())
         edit_menu.addAction(cut_action)
 
-        paste_action = QAction("Paste", self)
+        paste_action = QAction(tr("Paste"), self)
         paste_action.setShortcut(QKeySequence.Paste)
         paste_action.triggered.connect(self._on_paste)
         edit_menu.addAction(paste_action)
 
         edit_menu.addSeparator()
 
-        group_action = QAction("Make Group", self)
+        group_action = QAction(tr("Make Group"), self)
         group_action.setShortcut(QKeySequence("Ctrl+G"))
         group_action.triggered.connect(self._on_make_group)
         edit_menu.addAction(group_action)
 
-        explode_action = QAction("Explode Group", self)
+        explode_action = QAction(tr("Explode Group"), self)
         explode_action.setShortcut(QKeySequence("Ctrl+Shift+G"))
         explode_action.triggered.connect(self._on_explode_group)
         edit_menu.addAction(explode_action)
 
         edit_menu.addSeparator()
 
-        heal_action = QAction("Heal Overlapping Faces", self)
+        heal_action = QAction(tr("Heal Overlapping Faces"), self)
         heal_action.triggered.connect(self._on_heal_overlaps)
         edit_menu.addAction(heal_action)
 
-        rebuild_action = QAction("Rebuild Faces (Planar)", self)
+        rebuild_action = QAction(tr("Rebuild Faces (Planar)"), self)
         rebuild_action.triggered.connect(self._on_rebuild_planar)
         edit_menu.addAction(rebuild_action)
 
         # View menu
-        view_menu = menubar.addMenu("View")
+        view_menu = menubar.addMenu(tr("View"))
 
         toggle_tray = self.tray.toggleViewAction()
-        toggle_tray.setText("Bandeja (Materiales / Cotas / Info)")
+        toggle_tray.setText(tr("Tray (Materials / Dimensions / Info)"))
         view_menu.addAction(toggle_tray)
         view_menu.addSeparator()
 
-        action_proj = QAction("Toggle Perspective / Parallel", self)
+        action_proj = QAction(tr("Toggle Perspective / Parallel"), self)
         action_proj.setShortcut(QKeySequence("P"))
         action_proj.triggered.connect(self.viewport.toggle_projection)
         view_menu.addAction(action_proj)
 
         view_menu.addSeparator()
 
-        action_zoom_extents = QAction("Zoom Extents", self)
+        action_zoom_extents = QAction(tr("Zoom Extents"), self)
         action_zoom_extents.setShortcut(QKeySequence("F2"))
         action_zoom_extents.triggered.connect(self._on_zoom_extents)
         view_menu.addAction(action_zoom_extents)
 
-        standard_menu = view_menu.addMenu("Standard Views")
+        standard_menu = view_menu.addMenu(tr("Standard Views"))
         for label, key in [
             ("Top", "top"),
             ("Bottom", "bottom"),
@@ -239,38 +241,67 @@ class MainWindow(QMainWindow):
             ("Right", "right"),
             ("Isometric", "iso"),
         ]:
-            action = QAction(label, self)
+            action = QAction(tr(label), self)
             action.triggered.connect(lambda _checked, k=key: self._on_standard_view(k))
             standard_menu.addAction(action)
 
+        view_menu.addSeparator()
+        self._build_language_menu(view_menu)
+
         # Tools menu (mirrors the toolbar)
-        tools_menu = menubar.addMenu("Tools")
+        tools_menu = menubar.addMenu(tr("Tools"))
         for action in self._tool_actions.values():
             tools_menu.addAction(action)
         tools_menu.addSeparator()
         for action in self._nav_actions.values():
             tools_menu.addAction(action)
         tools_menu.addSeparator()
-        action_cancel = QAction("Cancel current tool", self)
+        action_cancel = QAction(tr("Cancel current tool"), self)
         action_cancel.setShortcut(QKeySequence("Esc"))
         action_cancel.triggered.connect(self._cancel_tool)
         tools_menu.addAction(action_cancel)
 
-        help_menu = menubar.addMenu("Help")
-        about_action = QAction("About IngeTrazo", self)
+        help_menu = menubar.addMenu(tr("Help"))
+        about_action = QAction(tr("About IngeTrazo"), self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+
+    # ---- Language -----------------------------------------------------------
+    _LANGUAGE_NAMES = {"en": "English", "es": "Español"}
+
+    def _build_language_menu(self, parent_menu) -> None:
+        lang_menu = parent_menu.addMenu(tr("Language"))
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for code in available_languages():
+            action = QAction(self._LANGUAGE_NAMES.get(code, code), self)
+            action.setCheckable(True)
+            action.setChecked(code == current_language())
+            action.triggered.connect(lambda _checked, c=code: self._on_set_language(c))
+            group.addAction(action)
+            lang_menu.addAction(action)
+
+    def _on_set_language(self, code: str) -> None:
+        """Persist the chosen UI language (applied on next start)."""
+        if code == current_language():
+            return
+        QSettings().setValue("language", code)
+        set_language(code)
+        QMessageBox.information(
+            self,
+            tr("Language changed"),
+            tr("Restart IngeTrazo to apply the new language."),
+        )
 
     def _on_about(self) -> None:
         QMessageBox.about(
             self,
-            "About IngeTrazo",
+            tr("About IngeTrazo"),
             "<h3>IngeTrazo</h3>"
-            "<p>Free 3D modeler for architecture, civil engineering "
-            "and 3D printing.</p>"
-            "<p>Created by <b>Marco Sumari Tellez</b><br>"
-            "Civil Engineer — Lima, Peru</p>"
-            "<p>Licensed under GPL-3.0-or-later.<br>"
+            f"<p>{tr('Free 3D modeler for architecture, civil engineering and 3D printing.')}</p>"
+            f"<p>{tr('Created by')} <b>Marco Sumari Tellez</b><br>"
+            f"{tr('Civil Engineer — Lima, Peru')}</p>"
+            f"<p>{tr('Licensed under GPL-3.0-or-later.')}<br>"
             "<a href='https://github.com/tuxiasumari/ingetrazo'>"
             "github.com/tuxiasumari/ingetrazo</a></p>"
             "<p><i>Trazá. Metrá. Presupuestá.</i></p>",
@@ -279,43 +310,43 @@ class MainWindow(QMainWindow):
     def _file_actions(self) -> list[QAction]:
         actions = []
 
-        new_action = QAction("New", self)
+        new_action = QAction(tr("New"), self)
         new_action.setShortcut(QKeySequence.New)
         new_action.triggered.connect(self._on_new)
         actions.append(new_action)
 
-        open_action = QAction("Open…", self)
+        open_action = QAction(tr("Open…"), self)
         open_action.setShortcut(QKeySequence.Open)
         open_action.triggered.connect(self._on_open)
         actions.append(open_action)
 
-        save_action = QAction("Save", self)
+        save_action = QAction(tr("Save"), self)
         save_action.setShortcut(QKeySequence.Save)
         save_action.triggered.connect(self._on_save)
         actions.append(save_action)
 
-        save_as_action = QAction("Save As…", self)
+        save_as_action = QAction(tr("Save As…"), self)
         save_as_action.setShortcut(QKeySequence.SaveAs)
         save_as_action.triggered.connect(self._on_save_as)
         actions.append(save_as_action)
 
         actions.append(self._separator())
 
-        import_obj_action = QAction("Import OBJ…", self)
+        import_obj_action = QAction(tr("Import OBJ…"), self)
         import_obj_action.triggered.connect(self._on_import_obj)
         actions.append(import_obj_action)
 
-        export_stl_action = QAction("Export STL…", self)
+        export_stl_action = QAction(tr("Export STL…"), self)
         export_stl_action.triggered.connect(self._on_export_stl)
         actions.append(export_stl_action)
 
-        export_obj_action = QAction("Export OBJ…", self)
+        export_obj_action = QAction(tr("Export OBJ…"), self)
         export_obj_action.triggered.connect(self._on_export_obj)
         actions.append(export_obj_action)
 
         actions.append(self._separator())
 
-        quit_action = QAction("Quit", self)
+        quit_action = QAction(tr("Quit"), self)
         quit_action.setShortcut(QKeySequence.Quit)
         quit_action.triggered.connect(self.close)
         actions.append(quit_action)
@@ -330,14 +361,14 @@ class MainWindow(QMainWindow):
     def _build_statusbar(self) -> None:
         bar = QStatusBar(self)
         self.setStatusBar(bar)
-        bar.showMessage(
+        bar.showMessage(tr(
             "Orbit (O) / Pan (H) buttons: left-drag to move the view  ·  "
             "MMB-drag: orbit  ·  Shift+MMB-drag: pan  ·  Wheel / 2-finger: zoom  ·  "
             "P: persp/parallel  ·  →←↑: lock X/Y/Z  ·  ↓: par/perp to ref  ·  "
             "Shift: lock inference  ·  Type N + Enter: exact length  ·  "
             "Rectangle: type W;H + Enter  ·  Type X;Y;Z + Enter: 3D delta"
-        )
-        self._tool_label = QLabel("Tool: none")
+        ))
+        self._tool_label = QLabel(tr("Tool: none"))
         bar.addPermanentWidget(self._tool_label)
 
         # SketchUp-style Measurements box (VCB), pinned bottom-right: a caption
@@ -386,7 +417,7 @@ class MainWindow(QMainWindow):
         self._vcb_value.setVisible(caption is not None)
         if caption is None:
             return
-        self._vcb_name.setText(caption)
+        self._vcb_name.setText(tr(caption))
         if self._vcb_buffer:
             self._vcb_value.setText(f"{self._vcb_buffer}")
             self._vcb_value.setStyleSheet(self._VCB_ACTIVE_STYLE)
@@ -401,7 +432,7 @@ class MainWindow(QMainWindow):
         action = self._tool_actions.get(key)
         if action is not None:
             action.setChecked(True)
-        self._tool_label.setText(f"Tool: {tool.name}")
+        self._tool_label.setText(tr("Tool: {name}", name=tr(tool.name)))
         self._refresh_vcb()
 
     def _activate_nav(self, key: str) -> None:
@@ -409,7 +440,8 @@ class MainWindow(QMainWindow):
         action = self._nav_actions.get(key)
         if action is not None:
             action.setChecked(True)
-        self._tool_label.setText(f"Nav: {key.capitalize()}")
+        self._tool_label.setText(
+            tr("Nav: {name}", name=tr(key.capitalize())))
         self._refresh_vcb()
 
     def _on_make_group(self) -> None:
@@ -432,17 +464,17 @@ class MainWindow(QMainWindow):
         self.viewport.history.execute(cmd)
         self.viewport.update()
         self.statusBar().showMessage(
-            f"Healed {cmd.healed} overlapping face(s)." if cmd.healed
-            else "No overlapping faces found.", 3000)
+            tr("Healed {n} overlapping face(s).", n=cmd.healed) if cmd.healed
+            else tr("No overlapping faces found."), 3000)
 
     def _on_rebuild_planar(self) -> None:
         cmd = RebuildPlanarFacesCommand()
         self.viewport.history.execute(cmd)
         self.viewport.update()
         if not cmd.flat:
-            msg = "Rebuild Faces only works on a flat (single-plane) drawing."
+            msg = tr("Rebuild Faces only works on a flat (single-plane) drawing.")
         else:
-            msg = f"Rebuilt {cmd.rebuilt} face(s) from the edge graph."
+            msg = tr("Rebuilt {n} face(s) from the edge graph.", n=cmd.rebuilt)
         self.statusBar().showMessage(msg, 3000)
 
     def _on_paste(self) -> None:
@@ -451,7 +483,7 @@ class MainWindow(QMainWindow):
         self.viewport.set_active_tool(PasteTool())
         for action in self._tool_actions.values():
             action.setChecked(False)
-        self._tool_label.setText("Tool: Paste")
+        self._tool_label.setText(tr("Tool: {name}", name=tr("Paste")))
         self._refresh_vcb()
 
     def _cancel_tool(self) -> None:
@@ -484,7 +516,7 @@ class MainWindow(QMainWindow):
 
     # ---- File handling ------------------------------------------------------
     def _on_new(self) -> None:
-        if not self._confirm_discard("Discard current drawing?"):
+        if not self._confirm_discard(tr("Discard current drawing?")):
             return
         scene = self.viewport.scene
         scene.mesh.clear()
@@ -497,13 +529,14 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     def _on_open(self) -> None:
-        if not self._confirm_discard("Discard current drawing and open another?"):
+        if not self._confirm_discard(
+                tr("Discard current drawing and open another?")):
             return
         path_str, _ = QFileDialog.getOpenFileName(
             self,
-            "Open IngeTrazo document",
+            tr("Open IngeTrazo document"),
             "",
-            IGZ_FILE_FILTER,
+            tr(IGZ_FILE_FILTER),
         )
         if not path_str:
             return
@@ -511,7 +544,7 @@ class MainWindow(QMainWindow):
         try:
             igz_format.load_into(self.viewport.scene, path)
         except Exception as exc:  # noqa: BLE001 - surface any IO/parse error to the user
-            QMessageBox.critical(self, "Open failed", str(exc))
+            QMessageBox.critical(self, tr("Open failed"), str(exc))
             return
         self.viewport.history.clear()
         self._current_path = path
@@ -531,9 +564,9 @@ class MainWindow(QMainWindow):
         )
         path_str, _ = QFileDialog.getSaveFileName(
             self,
-            "Save IngeTrazo document",
+            tr("Save IngeTrazo document"),
             default_name,
-            IGZ_FILE_FILTER,
+            tr(IGZ_FILE_FILTER),
         )
         if not path_str:
             return
@@ -546,7 +579,7 @@ class MainWindow(QMainWindow):
         try:
             igz_format.save_scene(self.viewport.scene, path)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Save failed", str(exc))
+            QMessageBox.critical(self, tr("Save failed"), str(exc))
             return
         self._current_path = path
         self._saved_version = self.viewport.scene.version
@@ -554,7 +587,7 @@ class MainWindow(QMainWindow):
 
     def _on_import_obj(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(
-            self, "Import OBJ", "", "Wavefront OBJ (*.obj);;All files (*)")
+            self, tr("Import OBJ"), "", tr("Wavefront OBJ (*.obj);;All files (*)"))
         if not path_str:
             return
         path = Path(path_str)
@@ -562,22 +595,22 @@ class MainWindow(QMainWindow):
             self.viewport.history.execute(SnapshotMutation(
                 lambda scene: obj_format.load_obj(scene, path)))
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Import OBJ failed", str(exc))
+            QMessageBox.critical(self, tr("Import OBJ failed"), str(exc))
             return
         self.viewport.update()
-        self.statusBar().showMessage(f"Imported {path.name}", 3000)
+        self.statusBar().showMessage(tr("Imported {name}", name=path.name), 3000)
 
     def _on_export_stl(self) -> None:
-        self._export("STL", "stl", "STL mesh (*.stl)", stl_format.save_stl)
+        self._export("STL", "stl", tr("STL mesh (*.stl)"), stl_format.save_stl)
 
     def _on_export_obj(self) -> None:
-        self._export("OBJ", "obj", "Wavefront OBJ (*.obj)", obj_format.save_obj)
+        self._export("OBJ", "obj", tr("Wavefront OBJ (*.obj)"), obj_format.save_obj)
 
     def _export(self, label: str, suffix: str, file_filter, writer) -> None:
         base = (self._current_path.stem if self._current_path is not None
                 else "untitled")
         path_str, _ = QFileDialog.getSaveFileName(
-            self, f"Export {label}", f"{base}.{suffix}", file_filter)
+            self, tr("Export {label}", label=label), f"{base}.{suffix}", file_filter)
         if not path_str:
             return
         path = Path(path_str)
@@ -586,9 +619,11 @@ class MainWindow(QMainWindow):
         try:
             writer(self.viewport.scene, path)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, f"Export {label} failed", str(exc))
+            QMessageBox.critical(
+                self, tr("Export {label} failed", label=label), str(exc))
             return
-        self.statusBar().showMessage(f"Exported {label} → {path.name}", 3000)
+        self.statusBar().showMessage(
+            tr("Exported {label} → {name}", label=label, name=path.name), 3000)
 
     def _confirm_discard(self, prompt: str) -> bool:
         """Return True if it's safe to discard the current drawing."""
@@ -596,8 +631,8 @@ class MainWindow(QMainWindow):
             return True
         answer = QMessageBox.question(
             self,
-            "Unsaved changes",
-            f"{prompt}\n\nUnsaved changes will be lost.",
+            tr("Unsaved changes"),
+            tr("{prompt}\n\nUnsaved changes will be lost.", prompt=prompt),
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
             QMessageBox.Save,
         )
@@ -613,13 +648,14 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     def _update_title(self) -> None:
-        name = self._current_path.name if self._current_path is not None else "Untitled"
+        name = (self._current_path.name if self._current_path is not None
+                else tr("Untitled"))
         marker = " *" if self._is_dirty() else ""
         self.setWindowTitle(f"IngeTrazo — {name}{marker}")
 
     # ---- Window lifecycle ---------------------------------------------------
     def closeEvent(self, event) -> None:
-        if not self._confirm_discard("Quit IngeTrazo?"):
+        if not self._confirm_discard(tr("Quit IngeTrazo?")):
             event.ignore()
             return
         super().closeEvent(event)

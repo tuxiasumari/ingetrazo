@@ -66,6 +66,7 @@ from PySide6.QtOpenGL import (
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from core.camera import OrbitCamera
+from core.i18n import tr
 from core.group import Group
 from core.mesh import Edge, Face
 from core.history import EraseSelectionCommand, History
@@ -179,19 +180,19 @@ class Viewport(QOpenGLWidget):
     # Warm cream (SketchUp-ish) painted on faces with no material colour.
     DEFAULT_FACE_COLOR = (0.92, 0.89, 0.81)
 
-    # Tooltip text shown next to the snap marker, SketchUp-style (Spanish, to
-    # match SketchUp's inference labels).
+    # Tooltip text shown next to the snap marker, SketchUp-style. English source
+    # strings; translated at draw time via ``tr`` (see i18n/es.json).
     _SNAP_LABELS = {
-        "endpoint": "Extremo final",
-        "midpoint": "Punto medio",
-        "on_edge": "En arista",
-        "on_face": "En cara",
-        "origin": "Origen",
-        "extension": "Extensión",
-        "intersection": "Intersección",
-        "from_point": "Desde el punto",
-        "through_point": "A través del punto",
-        "perp_face": "Perpendicular a la cara",
+        "endpoint": "Endpoint",
+        "midpoint": "Midpoint",
+        "on_edge": "On edge",
+        "on_face": "On face",
+        "origin": "Origin",
+        "extension": "Extension",
+        "intersection": "Intersection",
+        "from_point": "From point",
+        "through_point": "Through point",
+        "perp_face": "Perpendicular to face",
     }
 
     def __init__(self, parent=None) -> None:
@@ -1170,6 +1171,7 @@ class Viewport(QOpenGLWidget):
         # Tooltip text next to the marker (SketchUp shows "On Edge", etc.).
         label = self._SNAP_LABELS.get(snap.kind)
         if label:
+            label = tr(label)
             font = QFont()
             font.setPointSize(9)
             painter.setFont(font)

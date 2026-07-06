@@ -1,11 +1,3 @@
 {
-  "app.name": "IngeTrazo",
-  "app.tagline": "Free 3D modeler for architecture and 3D printing",
-  "menu.file": "File",
-  "menu.edit": "Edit",
-  "menu.view": "View",
-  "menu.tools": "Tools",
-  "menu.window": "Window",
-  "menu.help": "Help",
-  "status.ready": "Ready"
+  "_comment": "English is the source language: keys ARE the English strings, so this identity map stays empty. Translations live in es.json and future <lang>.json files."
 }

@@ -41,6 +41,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QVector3D
 
 from core.geometry import Face
+from core.i18n import tr
 from core.history import (
     AddEdgeCommand,
     AddFaceCommand,
@@ -482,7 +483,7 @@ class PushPullTool(Tool):
             self.extrusion = -self._limit_in
             if viewport is not None:
                 viewport.flash_status(
-                    f"Offset limited to {self._limit_in:.2f} m")
+                    tr("Offset limited to {value} m", value=f"{self._limit_in:.2f}"))
 
     def _infer_reference_distance(self, ctx: ToolContext):
         """Distance making the moved face level with the model geometry under the
@@ -608,7 +609,7 @@ class PushPullTool(Tool):
             # The guard rolled the push back to keep the solid watertight; tell
             # the user so the no-op isn't silent.
             viewport.flash_status(
-                "Push refused: would break the solid (left it unchanged)")
+                tr("Push refused: would break the solid (left it unchanged)"))
         else:
             PushPullTool.last_distance = self.extrusion  # double-click repeats it
         self._reset()

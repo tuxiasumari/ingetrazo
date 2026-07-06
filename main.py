@@ -10,8 +10,23 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import QLocale, QSettings
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication
+
+from core import i18n
+
+
+def _init_language() -> None:
+    """Load the saved UI language, or default to the system locale.
+
+    Reads the persisted choice from :class:`QSettings`; on first run, falls back
+    to Spanish when the OS locale is Spanish, English otherwise.
+    """
+    saved = QSettings().value("language")
+    if not saved:
+        saved = "es" if QLocale.system().language() == QLocale.Spanish else "en"
+    i18n.set_language(str(saved))
 
 from views.main_window import MainWindow
 
@@ -37,6 +52,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("IngeTrazo")
     app.setOrganizationName("IngeTrazo")
+    _init_language()
     window = MainWindow()
     window.show()
     return app.exec()

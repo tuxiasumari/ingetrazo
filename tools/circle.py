@@ -15,6 +15,7 @@ from PySide6.QtGui import QVector3D
 
 from core.edits import build_add_edges
 from core.history import AddFaceCommand
+from core.i18n import tr
 from core.triangulate import plane_axes
 from tools.base import Tool, ToolContext
 
@@ -23,11 +24,14 @@ class _RadialTool(Tool):
     """Shared centre+radius regular-polygon tool. Subclasses set ``sides``."""
 
     sides: int = 24
-    vcb_label = "Radio"
+    vcb_label = "Radius"
 
     def vcb_caption(self) -> str:
-        """SketchUp shows 'Sides' before the centre, 'Radius' after."""
-        return "Radio" if self.start_point is not None else "Lados"
+        """SketchUp shows 'Sides' before the centre, 'Radius' after.
+
+        Returns the English source label; the status bar translates it.
+        """
+        return "Radius" if self.start_point is not None else "Sides"
 
     def __init__(self) -> None:
         self.start_point: QVector3D | None = None   # centre (also drives work plane)
@@ -64,7 +68,7 @@ class _RadialTool(Tool):
             n = int(round(value))
             if n >= 3:
                 self.sides = n
-                viewport.flash_status(f"{n} lados")
+                viewport.flash_status(tr("{n} sides", n=n))
                 return True
             return False
         if self.hover_point is None or value <= 0.0:

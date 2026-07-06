@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import tr
 from core.mesh import Edge, Face
 from core.group import Group
 from core.dimension import Dimension
@@ -118,7 +119,7 @@ class MaterialsPanel(QWidget):
 
         # Active material preview.
         row = QHBoxLayout()
-        row.addWidget(QLabel("Activo:"))
+        row.addWidget(QLabel(tr("Active:")))
         self._preview = QLabel()
         self._preview.setFixedSize(_SWATCH, _SWATCH)
         self._preview.setFrameShape(QFrame.Box)
@@ -126,21 +127,21 @@ class MaterialsPanel(QWidget):
         row.addStretch(1)
         root.addLayout(row)
 
-        root.addWidget(self._heading("En el modelo"))
+        root.addWidget(self._heading(tr("In model")))
         self._in_model_grid = QGridLayout()
         self._in_model_grid.setSpacing(3)
         root.addLayout(self._in_model_grid)
 
-        root.addWidget(self._heading("Biblioteca"))
+        root.addWidget(self._heading(tr("Library")))
         lib_grid = QGridLayout()
         lib_grid.setSpacing(3)
         root.addLayout(lib_grid)
         self._fill_library(lib_grid)
 
         btns = QHBoxLayout()
-        add_color = QPushButton("+ Color…")
+        add_color = QPushButton(tr("+ Color…"))
         add_color.clicked.connect(self._add_color)
-        add_tex = QPushButton("+ Textura…")
+        add_tex = QPushButton(tr("+ Texture…"))
         add_tex.clicked.connect(self._add_texture)
         btns.addWidget(add_color)
         btns.addWidget(add_tex)
@@ -159,7 +160,7 @@ class MaterialsPanel(QWidget):
     def _fill_library(self, grid: QGridLayout) -> None:
         i = 0
         for rgb in _LIBRARY_COLORS:
-            b = _swatch_button(_color_pixmap(rgb), "Color")
+            b = _swatch_button(_color_pixmap(rgb), tr("Color"))
             b.clicked.connect(lambda _=False, c=rgb: self._apply_color(c))
             grid.addWidget(b, i // self.COLS, i % self.COLS)
             i += 1
@@ -191,7 +192,7 @@ class MaterialsPanel(QWidget):
                     colors[tuple(col)] = col
         i = 0
         for col in colors.values():
-            b = _swatch_button(_color_pixmap(tuple(col)), "Color")
+            b = _swatch_button(_color_pixmap(tuple(col)), tr("Color"))
             b.clicked.connect(lambda _=False, c=tuple(col): self._apply_color(c))
             self._in_model_grid.addWidget(b, i // self.COLS, i % self.COLS)
             i += 1
@@ -221,18 +222,18 @@ class MaterialsPanel(QWidget):
 
     def _add_color(self) -> None:
         r, g, b = PaintTool.current_color
-        chosen = QColorDialog.getColor(QColor.fromRgbF(r, g, b), self, "Color")
+        chosen = QColorDialog.getColor(QColor.fromRgbF(r, g, b), self, tr("Color"))
         if chosen.isValid():
             self._apply_color((chosen.redF(), chosen.greenF(), chosen.blueF()))
 
     def _add_texture(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(
-            self, "Elegir textura", str(_TEX_DIR),
-            "Imágenes (*.png *.jpg *.jpeg *.bmp);;Todos (*)")
+            self, tr("Choose texture"), str(_TEX_DIR),
+            tr("Images (*.png *.jpg *.jpeg *.bmp);;All (*)"))
         if not path_str:
             return
         size, ok = QInputDialog.getDouble(
-            self, "Tamaño de textura", "Tamaño real de un tile (metros):",
+            self, tr("Texture size"), tr("Real tile size (meters):"),
             self._tile_size, 0.001, 1000.0, 3)
         if not ok:
             return
@@ -258,28 +259,28 @@ class DimensionStylePanel(QWidget):
         grid.setContentsMargins(8, 6, 8, 8)
         style = self._style()
 
-        grid.addWidget(QLabel("Decimales:"), 0, 0)
+        grid.addWidget(QLabel(tr("Decimals:")), 0, 0)
         self._decimals = QSpinBox()
         self._decimals.setRange(0, 4)
         self._decimals.setValue(int(style.get("decimals", 2)))
         self._decimals.valueChanged.connect(self._apply)
         grid.addWidget(self._decimals, 0, 1)
 
-        grid.addWidget(QLabel("Unidad:"), 1, 0)
+        grid.addWidget(QLabel(tr("Unit:")), 1, 0)
         self._units = QComboBox()
         self._units.addItems(["m", "cm", "mm"])
         self._units.setCurrentText(style.get("units", "m"))
         self._units.currentTextChanged.connect(self._apply)
         grid.addWidget(self._units, 1, 1)
 
-        grid.addWidget(QLabel("Fuente:"), 2, 0)
+        grid.addWidget(QLabel(tr("Font:")), 2, 0)
         self._font = QSpinBox()
         self._font.setRange(6, 28)
         self._font.setValue(int(style.get("font_size", 9)))
         self._font.valueChanged.connect(self._apply)
         grid.addWidget(self._font, 2, 1)
 
-        grid.addWidget(QLabel("Color:"), 3, 0)
+        grid.addWidget(QLabel(tr("Color:")), 3, 0)
         self._color_btn = QPushButton()
         self._color_btn.clicked.connect(self._pick_color)
         grid.addWidget(self._color_btn, 3, 1)
@@ -299,7 +300,7 @@ class DimensionStylePanel(QWidget):
     def _pick_color(self) -> None:
         c = self._style().get("color", [45, 55, 75])
         chosen = QColorDialog.getColor(QColor(c[0], c[1], c[2]), self,
-                                       "Color de cota")
+                                       tr("Dimension color"))
         if chosen.isValid():
             self._style()["color"] = [chosen.red(), chosen.green(), chosen.blue()]
             self._refresh_color_btn()
@@ -319,7 +320,7 @@ class EntityInfoPanel(QWidget):
         self._window = window
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 6, 8, 8)
-        self._label = QLabel("Nada seleccionado")
+        self._label = QLabel(tr("Nothing selected"))
         self._label.setWordWrap(True)
         self._label.setTextFormat(Qt.RichText)
         self._label.setStyleSheet("font-size: 12px;")
@@ -331,32 +332,34 @@ class EntityInfoPanel(QWidget):
 
     def _describe(self, sel: list) -> str:
         if not sel:
-            return "Nada seleccionado"
+            return tr("Nothing selected")
         if len(sel) == 1:
             e = sel[0]
             if isinstance(e, Face):
                 mat = self._material_of(e)
-                return (f"<b>Cara</b><br>Área: {e.area():.3f} m²<br>"
-                        f"Vértices: {len(e.vertices)}<br>Material: {mat}")
+                return (f"<b>{tr('Face')}</b><br>{tr('Area')}: {e.area():.3f} m²<br>"
+                        f"{tr('Vertices')}: {len(e.vertices)}<br>"
+                        f"{tr('Material')}: {mat}")
             if isinstance(e, Edge):
-                return f"<b>Arista</b><br>Largo: {(e.b - e.a).length():.3f} m"
+                return (f"<b>{tr('Edge')}</b><br>"
+                        f"{tr('Length')}: {(e.b - e.a).length():.3f} m")
             if isinstance(e, Dimension):
-                return f"<b>Cota</b><br>Medida: {e.value():.3f} m"
+                return f"<b>{tr('Dimension')}</b><br>{tr('Measure')}: {e.value():.3f} m"
             if isinstance(e, Group):
-                return f"<b>Grupo</b><br>Caras: {len(e.mesh.faces)}"
-            return "<b>1 entidad</b>"
-        counts = {"caras": 0, "aristas": 0, "cotas": 0, "grupos": 0}
+                return f"<b>{tr('Group')}</b><br>{tr('Faces')}: {len(e.mesh.faces)}"
+            return f"<b>{tr('1 entity')}</b>"
+        counts = {"faces": 0, "edges": 0, "dimensions": 0, "groups": 0}
         for e in sel:
             if isinstance(e, Face):
-                counts["caras"] += 1
+                counts["faces"] += 1
             elif isinstance(e, Edge):
-                counts["aristas"] += 1
+                counts["edges"] += 1
             elif isinstance(e, Dimension):
-                counts["cotas"] += 1
+                counts["dimensions"] += 1
             elif isinstance(e, Group):
-                counts["grupos"] += 1
-        parts = [f"{n} {k}" for k, n in counts.items() if n]
-        return "<b>Selección</b><br>" + ", ".join(parts)
+                counts["groups"] += 1
+        parts = [f"{n} {tr(k)}" for k, n in counts.items() if n]
+        return f"<b>{tr('Selection')}</b><br>" + ", ".join(parts)
 
     @staticmethod
     def _material_of(face) -> str:
@@ -373,7 +376,7 @@ class Tray(QDockWidget):
     """The right-side tray assembling the three panels."""
 
     def __init__(self, window) -> None:
-        super().__init__("Bandeja", window)
+        super().__init__(tr("Tray"), window)
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.setFeatures(QDockWidget.DockWidgetMovable
                          | QDockWidget.DockWidgetFloatable)
@@ -386,9 +389,9 @@ class Tray(QDockWidget):
         col = QVBoxLayout(inner)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(2)
-        col.addWidget(_Section("Materiales", self.materials))
-        col.addWidget(_Section("Estilo de cota", self.dim_style))
-        col.addWidget(_Section("Info de entidad", self.entity_info))
+        col.addWidget(_Section(tr("Materials"), self.materials))
+        col.addWidget(_Section(tr("Dimension style"), self.dim_style))
+        col.addWidget(_Section(tr("Entity info"), self.entity_info))
         col.addStretch(1)
 
         scroll = QScrollArea()
