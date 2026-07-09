@@ -99,10 +99,17 @@ def order_polyline(edges) -> list[QVector3D] | None:
     if any(len(adj[v]) > 2 for v in verts):
         return None
     endpoints = [v for v in verts if len(adj[v]) == 1]
+
+    def _pos_key(v):
+        p = v.position
+        return (round(p.x(), 6), round(p.y(), 6), round(p.z(), 6))
+
     if len(endpoints) == 2:
-        start = endpoints[0]
+        # Deterministic orientation (lower x,y,z is the start) so the profile
+        # doesn't mirror between recomputes during live edits.
+        start = min(endpoints, key=_pos_key)
     elif not endpoints:
-        start = next(iter(verts))          # closed loop
+        start = min(verts, key=_pos_key)   # closed loop — stable seed
     else:
         return None                        # dangling / disconnected
     ordered = [start]

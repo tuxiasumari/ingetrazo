@@ -103,6 +103,14 @@ class MainWindow(QMainWindow):
         self.viewport.sceneVersionChanged.connect(
             lambda _v: self.tray.on_scene_changed())
 
+        # Terrain profile dock (Track G, G4) — hidden until requested.
+        from views.profile_panel import ProfileDock
+        self.profile_dock = ProfileDock(self)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.profile_dock)
+        self.profile_dock.hide()
+        self.viewport.sceneVersionChanged.connect(
+            lambda _v: self.profile_dock.on_scene_changed())
+
     def _build_toolbar(self) -> None:
         toolbar = QToolBar(tr("Main"), self)
         toolbar.setMovable(False)
@@ -217,6 +225,10 @@ class MainWindow(QMainWindow):
         toggle_tray = self.tray.toggleViewAction()
         toggle_tray.setText(tr("Tray (Materials / Dimensions / Info)"))
         view_menu.addAction(toggle_tray)
+
+        toggle_profile = self.profile_dock.toggleViewAction()
+        toggle_profile.setText(tr("Terrain profile"))
+        view_menu.addAction(toggle_profile)
         view_menu.addSeparator()
 
         action_proj = QAction(tr("Toggle Perspective / Parallel"), self)
@@ -260,6 +272,11 @@ class MainWindow(QMainWindow):
         action_cancel.setShortcut(QKeySequence("Esc"))
         action_cancel.triggered.connect(self._cancel_tool)
         tools_menu.addAction(action_cancel)
+
+        tools_menu.addSeparator()
+        action_profile = QAction(tr("Terrain profile of selection"), self)
+        action_profile.triggered.connect(self._on_terrain_profile)
+        tools_menu.addAction(action_profile)
 
         help_menu = menubar.addMenu(tr("Help"))
         about_action = QAction(tr("About IngeTrazo"), self)
@@ -504,6 +521,12 @@ class MainWindow(QMainWindow):
     def _on_standard_view(self, key: str) -> None:
         self.viewport.camera.set_view(key)
         self.viewport.update()
+
+    def _on_terrain_profile(self) -> None:
+        """Show the profile dock and profile the current selection (Track G)."""
+        self.profile_dock.show()
+        self.profile_dock.raise_()
+        self.profile_dock.compute_from_selection()
 
     # ---- Undo / redo --------------------------------------------------------
     def _on_undo(self) -> None:
