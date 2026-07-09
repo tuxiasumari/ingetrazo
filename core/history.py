@@ -432,6 +432,67 @@ class DeleteDimensionsCommand(Command):
         scene.version += 1
 
 
+class AddGeoPathCommand(Command):
+    """Add a traced georef path to ``scene.geo_paths`` (Track G)."""
+
+    def __init__(self, path) -> None:
+        self.path = path
+
+    def do(self, scene) -> None:
+        scene.geo_paths.append(self.path)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self.path in scene.geo_paths:
+            scene.geo_paths.remove(self.path)
+        scene.selection.discard(self.path)
+        scene.version += 1
+
+
+class DeleteGeoPathsCommand(Command):
+    """Remove georef paths from ``scene.geo_paths``."""
+
+    def __init__(self, paths) -> None:
+        self._paths = list(paths)
+        self._restore: list[tuple[int, object]] = []
+
+    def do(self, scene) -> None:
+        self._restore = [(scene.geo_paths.index(p), p)
+                         for p in self._paths if p in scene.geo_paths]
+        for p in self._paths:
+            if p in scene.geo_paths:
+                scene.geo_paths.remove(p)
+            scene.selection.discard(p)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for i, p in sorted(self._restore):
+            scene.geo_paths.insert(i, p)
+        scene.version += 1
+
+
+class MoveGeoPathNodeCommand(Command):
+    """Move one node of a georef path to a new position (undoable)."""
+
+    def __init__(self, path, index, new_point) -> None:
+        from PySide6.QtGui import QVector3D
+        self.path = path
+        self.index = index
+        self._new = QVector3D(new_point)
+        self._old = None
+
+    def do(self, scene) -> None:
+        from PySide6.QtGui import QVector3D
+        self._old = QVector3D(self.path.points[self.index])
+        self.path.points[self.index] = QVector3D(self._new)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        from PySide6.QtGui import QVector3D
+        self.path.points[self.index] = QVector3D(self._old)
+        scene.version += 1
+
+
 class SetFaceTextureCommand(Command):
     """Apply an image texture (``{"path","sw","sh"}``) to a set of faces, or
     clear it with ``None`` — stored in each face's ``attrs["texture"]`` (rides

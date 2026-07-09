@@ -30,6 +30,9 @@ class Scene:
     groups: list = field(default_factory=list)
     # Annotation entities (static dimensions) — not geometry, drawn as overlays.
     dimensions: list = field(default_factory=list)
+    # Georef traced paths (roads / boundaries / alignments) — first-class georef
+    # entities, kept out of the topology mesh entirely (Track G).
+    geo_paths: list = field(default_factory=list)
     # Display style for dimension annotations (edited from the Tray).
     dimension_style: dict = field(default_factory=lambda: {
         "decimals": 2, "units": "m", "font_size": 9, "color": [45, 55, 75]})
@@ -94,10 +97,11 @@ class Scene:
     def clear(self) -> None:
         if (self.mesh.edges or self.mesh.faces or self.selection
                 or self.groups or self.dimensions or self.georef
-                or self.tile_layer):
+                or self.tile_layer or self.geo_paths):
             self.mesh.clear()
             self.groups.clear()
             self.dimensions.clear()
+            self.geo_paths.clear()
             self.selection.clear()
             self.georef = None
             self.tile_layer = None
