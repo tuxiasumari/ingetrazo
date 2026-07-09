@@ -2,11 +2,13 @@
 #
 # Deliberately minimal: the engine runs on PySide6 alone (Qt's bundled OpenGL
 # for rendering, QtGui's QMatrix4x4/QVector3D for math, the stdlib `array` for
-# vertex packing). No NumPy, no native mesh/BIM libraries — those are added
-# only when the feature that needs them actually lands.
+# vertex packing). NumPy joined in the georef DEM work (Track G, G2) for
+# heightfield decode/sampling. No native mesh/BIM libraries yet — those are
+# added only when the feature that needs them actually lands.
 
 # --- Runtime ---
 PySide6>=6.7
+numpy>=1.26        # DEM heightfield decode + sampling (georef Track G, G2)
 
 # --- Development ---
 pytest>=8.0
@@ -15,4 +17,6 @@ pytest>=8.0
 # ifcopenshell   # IFC import/export (BIM bridge with IngePresupuestos)
 # manifold3d     # robust boolean operations
 # pyassimp       # COLLADA/glTF import
-# pyproj, mercantile, rasterio, requests  # geo-referencing (DEM + tiles)
+# Note: georef tiles + DEM need NO extra pip — QNetworkAccessManager/QImage (Qt)
+# fetch tiles, NumPy decodes the DEM. pyproj/mercantile/rasterio intentionally
+# avoided (UTM ported by hand, slippy math + Terrain-RGB decoded in-project).
