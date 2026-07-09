@@ -342,6 +342,10 @@ class Viewport(QOpenGLWidget):
         self._tile_quad_vao = None
         self._tile_quad_vbo = None
 
+        # Georef path node being hovered ``(path, index)`` — for the drag handle
+        # highlight (Track G, GeoPath node editing).
+        self._hover_geo_node = None
+
     # ---- GL lifecycle -------------------------------------------------------
     def initializeGL(self) -> None:
         self._gl = QOpenGLFunctions(self.context())
@@ -1169,6 +1173,9 @@ class Viewport(QOpenGLWidget):
         # the extrusion is snapping level with).
         self._draw_inference_marker(painter)
 
+        # Traced georef paths (roads / boundaries) — Track G.
+        self._draw_geo_paths(painter)
+
         # Persistent dimension annotations
         self._draw_dimensions(painter)
 
@@ -1292,6 +1299,35 @@ class Viewport(QOpenGLWidget):
             painter.drawText(QPointF(px + 11, py + 17), label)
             painter.setPen(QPen(color))
             painter.drawText(QPointF(px + 10, py + 16), label)
+
+    def _draw_geo_paths(self, painter: QPainter) -> None:
+        """Draw committed georef paths (roads / boundaries): a coloured polyline
+        with node handles. Selected paths and the hovered node highlight."""
+        paths = getattr(self.scene, "geo_paths", None)
+        if not paths:
+            return
+        base_ink = QColor(0, 190, 210)          # cyan — reads over terrain
+        sel_ink = QColor(243, 115, 41)          # selection orange
+        selection = self.scene.selection
+        hover_node = getattr(self, "_hover_geo_node", None)
+        for path in paths:
+            ink = sel_ink if path in selection else base_ink
+            pix = [self._world_to_pixel(p) for p in path.points]
+            painter.setPen(QPen(ink, 2.5))
+            for a, b in zip(pix, pix[1:]):
+                if a is not None and b is not None:
+                    painter.drawLine(QPointF(*a), QPointF(*b))
+            if path.closed and len(pix) > 2 and pix[0] and pix[-1]:
+                painter.drawLine(QPointF(*pix[-1]), QPointF(*pix[0]))
+            # Node handles.
+            painter.setBrush(ink)
+            painter.setPen(QPen(QColor(255, 255, 255), 1))
+            for i, q in enumerate(pix):
+                if q is None:
+                    continue
+                r = 5.0 if (hover_node == (path, i)) else 3.5
+                painter.drawEllipse(QPointF(*q), r, r)
+            painter.setBrush(Qt.NoBrush)
 
     def _draw_dimensions(self, painter: QPainter) -> None:
         """Draw every committed static dimension: extension lines from the

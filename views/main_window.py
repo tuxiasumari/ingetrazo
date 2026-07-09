@@ -37,6 +37,7 @@ from formats import stl as stl_format
 from tools.arc import ArcTool, ThreePointArcTool
 from tools.circle import CircleTool, PolygonTool
 from tools.dimension import DimensionTool
+from tools.geopath import GeoPathTool
 from tools.line import LineTool
 from tools.move import MoveTool
 from tools.rotated_rectangle import RotatedRectangleTool
@@ -74,6 +75,8 @@ class MainWindow(QMainWindow):
             "move": MoveTool(),
             "paint": PaintTool(),
             "dimension": DimensionTool(),
+            # Georef trace (Track G) — draws a GeoPath, never mesh geometry.
+            "geopath": GeoPathTool(),
         }
         self._tool_actions: dict[str, QAction] = {}
 

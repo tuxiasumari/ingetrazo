@@ -178,6 +178,7 @@
   "Sentinel-2 cloudless (EOX)": "Sentinel-2 sin nubes (EOX)",
   "OpenStreetMap (streets)": "OpenStreetMap (calles)",
 
+  "Path": "Ruta",
   "Terrain profile": "Perfil del terreno",
   "Terrain profile of selection": "Perfil del terreno de la selección",
   "Select a polyline and click “Profile”.": "Seleccioná una polilínea y hacé clic en «Perfil».",
