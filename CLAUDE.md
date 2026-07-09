@@ -415,6 +415,15 @@ Orden sugerido alineado con la visión (freeform + BIM tagging + 2D que emerge d
 
 > **✅ MVP COMPLETO (2026-07-09).** G0 (datum) + G1 (teselas satelital) + G3 (trazar sobre la base) + G4 (perfil longitudinal) hechos y verificados. Flujo end-to-end: ir a una ubicación → ver satélite a escala → trazar una polilínea → ver su perfil de terreno (con DEM real, live update, export CSV/PNG). Falta la **expansión**: G2-full (terreno 3D drapeado — solo el muestreo DEM está hecho), G5 (curvas de nivel), G6 (fotogrametría + I/O geo KML/GeoJSON/DXF).
 
+> **🧭 Rediseño GeoPath (2026-07-09, tarde) — el trazo georef es su PROPIO subsistema, separado del motor 3D.** El usuario detectó que trazar rutas/linderos con la Línea del motor de topología era "mezclar papas con camotes" y arriesgaba el motor de modelado (que estaba bien). Se creó `GeoPath` como entidad de primera clase (`Scene.geo_paths`, **nunca** `Scene.mesh`), aplicando el principio de `Scene` heterogénea. Lo hecho:
+> - **`georef/geopath.py`** — `GeoPath` (nodos en metros locales, abierto/cerrado, length/segments/profile_points), `.igz` propio, comandos Add/Delete/MoveNode.
+> - **`tools/geopath.py`** — herramienta **Ruta (T)**: dibuja con el feel SketchUp (rubber-band, VCB, cerrar loop) pero commitea un GeoPath, no malla (`uses_snap=False`, plano Z=0 fijo). **Edición de nodos estilo Google Earth** dentro de la misma tool: click agarra un nodo, drag lo mueve en vivo, click lo suelta (undoable), Esc revierte.
+> - **Render** propio en el overlay (`viewport._draw_geo_paths`: polilínea cian + handles de nodo, naranja al seleccionar).
+> - **Selección**: `viewport.pick_geopath` + SelectTool (click en la línea selecciona el path; Delete lo borra).
+> - **Perfil desde GeoPath** (`selected_geopath`), live update al mover nodos, y **progresiva al hover** del perfil (cursor vertical + "Prog 1+625.66 · 3311.5 m").
+> - **Motor 3D INTACTO**: se revirtieron los toques previos (pegado-Z=0 en el dispatch + agarre-de-vértice en Move). La Línea/Move del motor quedaron exactamente como estaban.
+> - **El feel de dibujo SketchUp (snap/VCB/rubber-band) es infra de UI compartida y segura; lo que se separó es el *destino* de la geometría** (mesh vs geo_paths). 21 tests nuevos (geopath+profile), 636 verdes.
+
 | Fase | Objetivo | Archivos nuevos / tocados | Deps | DoD |
 |---|---|---|---|---|
 | **✅ G0** Cimiento georef *(hecho 2026-07-09)* | Datum local + CRS + esquema de escena | `georef/datum.py` (`SceneDatum` + `utm_forward`/`utm_inverse` con zona forzada; geodetic↔local en metros locales X=este/Y=norte/Z=alt; port del forward de IngePresupuestos + inverse Snyder); `core/scene.py` (`+georef`, reset en `clear`); `formats/igz.py` (bloque `georef.datum` opcional, backward-compat sin bump de formato) | — | ✅ round-trip <1 mm a escala ciudad (12 tests en `tests/test_datum.py`, 580 verdes); persiste en `.igz`; app arranca sin regresión |
