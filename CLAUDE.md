@@ -391,11 +391,43 @@ Orden sugerido alineado con la visión (freeform + BIM tagging + 2D que emerge d
 - **IFC import** — para abrir modelos externos.
 - **DWG / DXF I/O** — convivir con clientes/colegas que usan AutoCAD; no para competir contra él.
 - **STL / 3MF export** — para impresión 3D.
-- **Geo-referenciación** — terreno DEM + ortofoto. Carpeta `georef/` ya esqueleteada.
+- **Geo-referenciación** — terreno DEM + ortofoto. Carpeta `georef/` ya esqueleteada. **Plan por fases detallado: ver «🌍 Track G» abajo (definido 2026-07-09).**
 - **Plugin system público** — el patrón `Tool` + auto-discovery en `plugins/` ya está armado, falta documentar y publicar API.
 - **Sistema de licencia y release** — portear desde IngePresupuestos: `core/update_manager.py`, `release.sh`, GitHub Actions, distribución vía R2.
 
 **Diferido a v2:** generación profesional de planos (LayOut-equivalente: márgenes, sello, escala, múltiples vistas por hoja, leyendas). Por ahora, exportar la vista actual como SVG/PDF cubre el 80% del uso casual.
+
+---
+
+### 🌍 Track G — Georreferenciación: terreno + teselas (plan por fases, definido 2026-07-09)
+
+**Motivación:** tapar el hueco que deja Google Earth desktop (rumor de discontinuación) para el flujo civil: **traer imagen satelital + terreno → trazar una polilínea (carretera/lindero) → ver su perfil longitudinal / curvas de nivel → ajustar el trazo**. Encaja EXACTO con la visión "fotogrametría → georef → trazar → tag": construye los objetos heterogéneos #1 (malla de referencia) y #2 (contexto georef) que la `Scene` ya reserva. Es trabajo **post-v0.1**, aditivo sobre motor maduro.
+
+**Invariantes NO negociables (heredados de la arquitectura — releer antes de tocar código):**
+1. **Datum local primero.** `QVector3D` es float32 → coords UTM (~500 km) pierden precisión a cm. Todo lo que entra a la escena vive en **metros locales** relativos a un origen de escena (`SceneDatum`). NO meter coords geográficas crudas en la malla. (Fase G0, bloqueante de todo el resto — es la decisión que el stub `georef/` esperaba.)
+2. **El terreno es display-only, FUERA del motor de topología.** El DEM/ortofoto es un objeto de `Scene` nuevo (mismo criterio que `groups`/`dimensions`) con su propio VBO y render pass — **nunca** `Scene.mesh` (el weld/heal/push-pull lo destrozaría y sería O(F²) letal a densidad de DEM). Solo la geometría **trazada por el usuario** (polilínea/polígono, pequeña) entra al motor.
+3. **Operaciones como acciones headless (AI-native).** Perfil, contornos, fetch, build-terreno = comandos / API `georef.*`, no lógica pegada al evento de mouse — mismo sustrato que la capa agéntica futura. Toda mutación sigue pasando por `Command` (undo/redo).
+4. **Deps mínimas.** Teselas vía `QNetworkAccessManager` + `QImage` (Qt, cero pip nuevo). **NumPy entra en G2** (heightfield) — primer uso en el proyecto, anotado en Stack. Sin GDAL/rasterio (peso ARM); decodificar Terrain-RGB a mano.
+5. **Legal — Google indirecto = URL pegada por el usuario, como QGIS.** Presets legales por defecto (Esri World Imagery, Sentinel-2). Un campo **"XYZ personalizado"** deja al usuario pegar cualquier URL (incl. Google) → el riesgo lo asume él, IngeTrazo no empaqueta la URL de Google. **NUNCA** setear la de Google como fuente por defecto en el binario distribuido.
+6. **Precisión honesta.** DEM global gratis (Terrain-RGB / SRTM / Copernicus ~30 m) = **anteproyecto/visualización, NO topografía de obra.** Para trazo fino: fotogrametría/LiDAR del usuario (G6). Mostrarlo en la UI.
+
+**MVP "reemplazo de Google Earth" = G0 + G1 + G3 + G4** (imagen + trazar + perfil), con muestreo de DEM ligero en G4 sin necesitar aún el terreno 3D completo (G2). El 3D drapeado (G2), contornos (G5) y fotogrametría (G6) son la expansión.
+
+| Fase | Objetivo | Archivos nuevos / tocados | Deps | DoD |
+|---|---|---|---|---|
+| **✅ G0** Cimiento georef *(hecho 2026-07-09)* | Datum local + CRS + esquema de escena | `georef/datum.py` (`SceneDatum` + `utm_forward`/`utm_inverse` con zona forzada; geodetic↔local en metros locales X=este/Y=norte/Z=alt; port del forward de IngePresupuestos + inverse Snyder); `core/scene.py` (`+georef`, reset en `clear`); `formats/igz.py` (bloque `georef.datum` opcional, backward-compat sin bump de formato) | — | ✅ round-trip <1 mm a escala ciudad (12 tests en `tests/test_datum.py`, 580 verdes); persiste en `.igz`; app arranca sin regresión |
+| **G1** Teselas satelital (XYZ) | Imagen base tipo Earth, provider-agnóstica | `georef/tiles.py` (slippy z/x/y, `TileSource` presets + **XYZ custom**, fetch async `QNetworkAccessManager`, caché disco en `USER_DATA_DIR/tiles/` + LRU); render pass propio (quads Z=0 texturizados, reusa el path `_tex_faces_vao`/`QOpenGLTexture`); UI en Tray "Mapa base" + "ir a lat/lon" | Qt (sin pip) | Elijo ubicación → veo Esri a escala real; cambio de fuente; pego URL XYZ y carga; teselas cacheadas (reabre offline); cero motor de topología |
+| **G2** Terreno 3D drapeado | DEM → malla display-only + ortofoto encima | `georef/dem.py` (fetch Terrain-RGB/OpenTopography, decode a alturas, heightfield → `TerrainObject` con VBO propio); drape planar de la textura (reusa `core/texture.py`); render pass de terreno en `viewport` | **NumPy** (1er uso), Qt net | Cargo DEM del área, veo terreno 3D con satélite drapeado a escala; toggle on/off; fit de cámara; nota de resolución ~30 m visible |
+| **G3** Trazar sobre la base | Polilínea/polígono pegados al terreno | Extensión de `snap.py`/pick para "surfacear" el punto sobre el `TerrainObject`; reusa `LineTool`/`PolygonTool` + `work_plane`; la geometría trazada SÍ entra al motor (pequeña, del usuario) | — | Trazo una polilínea de carretera y un polígono de lindero sobre el terreno; los vértices caen en la superficie; editable/undo; guardado en `.igz` |
+| **G4** ⭐ Perfil longitudinal | La paridad Google Earth | `georef/profile.py` (muestreo del DEM a lo largo de la polilínea → estación/cota, longitud, pendientes); panel 2D QPainter (estilo Curva S de IngePresupuestos / overlay de cotas), exageración vertical; **loop vivo**: arrastro un vértice → perfil se recalcula (señal `sceneVersionChanged`); acción headless `georef.profile(polyline)` | NumPy | Selecciono una polilínea → veo su perfil de terreno; muevo un vértice → perfil se actualiza en vivo; exporto perfil a imagen/CSV |
+| **G5** Curvas de nivel | Contornos del terreno | `georef/contours.py` (marching squares sobre el heightfield → isolíneas a intervalo configurable; mayores/menores + etiquetas); render como **overlay** (reusa patrón de `dimension.py` + hidden-line), NO geometría del motor | NumPy | Toggle de contornos a intervalo elegido; estilo mayor/menor; etiquetas de cota; rendimiento OK a escala predio |
+| **G6** Fotogrametría + I/O geo | Cierra el flujo de la visión | Import de malla de referencia (OBJ/PLY de WebODM/Agisoft) como objeto **display-only** georef (el heterogéneo #1); import/export KML/GeoJSON/DXF del trazo; CSV de estaciones | (opcional GeoTIFF) | Importo una malla fotogramétrica georef correcta, trazo encima, exporto el trazo/perfil |
+
+**Orden de arranque sugerido:** G0 → G1 → (G2 mínimo = solo muestreo DEM, sin malla 3D aún) → G3 → G4. Eso entrega el "Earth-like" completo. Luego G2 full 3D, G5, G6.
+
+**Estimación honesta (sesiones):** G0 ~1 · G1 ~2-3 (red+caché son nuevos en el proyecto) · G2 ~3-5 (NumPy + render nuevo) · G3 ~1-2 · G4 ~2-3 · G5 ~2 · G6 variable. **MVP (G0/1/3/4) ≈ 2-3 semanas** a ritmo suelto; expansión 3D (G2/5/6) otro tramo similar.
+
+**Decisión de rumbo:** esto adelanta el georef que estaba secuenciado *después* de v0.1. Legítimo, pero es un detour del roadmap del modelador — evaluar si las fases restantes del modelador (Tape Measure T, Eraser E, connected/solid select) se cierran antes, o si el hueco de Earth tiene prioridad. Aplicar la regla de oro: una fase G no está hecha hasta DoD + commit sin regresión + cero "lo dejo para después". Ver `[[project-georef-terreno-teselas]]`.
 
 ---
 
@@ -409,7 +441,7 @@ Orden sugerido alineado con la visión (freeform + BIM tagging + 2D que emerge d
 | Empaquetado de vértices | **`array` stdlib** (sin numpy) |
 | Snap fuzzy / inference | propio en `core/snap.py` |
 
-**Sin** numpy, ifcopenshell, trimesh, manifold3d, pyassimp aún — esos llegan cuando se necesiten (probablemente IFC el primero).
+**Sin** numpy, ifcopenshell, trimesh, manifold3d, pyassimp aún — esos llegan cuando se necesiten (probablemente IFC o el heightfield de georef **G2**, lo que llegue primero; ver «🌍 Track G»). Las teselas satelitales (Track G) se resuelven con `QNetworkAccessManager` + `QImage` de Qt — **cero pip nuevo**.
 
 ```bash
 cd /home/sumaritux/ingetrazo
