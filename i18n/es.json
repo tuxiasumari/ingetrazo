@@ -163,5 +163,18 @@
   "faces": "caras",
   "edges": "aristas",
   "dimensions": "cotas",
-  "groups": "grupos"
+  "groups": "grupos",
+
+  "Base map": "Mapa base",
+  "Source:": "Fuente:",
+  "Custom XYZ…": "XYZ personalizado…",
+  "Paste any XYZ tile URL. You assume responsibility for its terms.": "Pegá cualquier URL de teselas XYZ. Asumís la responsabilidad por sus términos.",
+  "Latitude:": "Latitud:",
+  "Longitude:": "Longitud:",
+  "Zoom:": "Zoom:",
+  "Go to location": "Ir a la ubicación",
+  "Show base map": "Mostrar mapa base",
+  "Esri World Imagery (satellite)": "Esri World Imagery (satélite)",
+  "Sentinel-2 cloudless (EOX)": "Sentinel-2 sin nubes (EOX)",
+  "OpenStreetMap (streets)": "OpenStreetMap (calles)"
 }

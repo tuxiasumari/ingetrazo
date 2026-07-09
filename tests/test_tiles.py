@@ -4,9 +4,11 @@
 templating, and the disk LRU cache. No GUI, no network."""
 from __future__ import annotations
 
+from georef.datum import SceneDatum
 from georef.tiles import (
     PRESETS,
     TileCache,
+    TileLayer,
     TileSource,
     custom_source,
     deg2num,
@@ -132,6 +134,46 @@ def test_cache_survives_reopen(tmp_path):
     TileCache(tmp_path).put("osm", 0, 0, 0, b"X")
     # A fresh cache over the same root reads the persisted tile (offline reopen).
     assert TileCache(tmp_path).get("osm", 0, 0, 0) == b"X"
+
+
+# ---- Tile layer (projection to local metres) ----------------------------------
+
+def test_layer_visible_tiles_nonempty_and_contiguous():
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=16, radius_m=1000)
+    tiles = layer.visible_tiles(datum)
+    assert len(tiles) >= 4
+    xs = {t[0] for t in tiles}
+    ys = {t[1] for t in tiles}
+    assert max(xs) - min(xs) + 1 == len(xs)
+    assert max(ys) - min(ys) + 1 == len(ys)
+
+
+def test_layer_quad_local_geometry():
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=16, radius_m=1000)
+    x, y = layer.visible_tiles(datum)[0]
+    quad = layer.quad_local(datum, x, y)
+    assert len(quad) == 6                      # two triangles
+    positions = [p for p, _ in quad]
+    assert all(abs(p.z()) < 1e-6 for p in positions)   # flat at Z=0 (G1)
+    # A z16 tile is ~600 m wide near the equator; corners span a sane size.
+    xs = [p.x() for p in positions]
+    ys = [p.y() for p in positions]
+    assert 50 < (max(xs) - min(xs)) < 5000
+    assert 50 < (max(ys) - min(ys)) < 5000
+
+
+def test_layer_north_edge_maps_to_higher_y():
+    # UV (u,0) is the tile's north edge; it must project to a larger local Y
+    # than the south edge (u,1) — the map is north-up.
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=16, radius_m=1000)
+    x, y = layer.visible_tiles(datum)[0]
+    quad = layer.quad_local(datum, x, y)
+    north = [p for p, uv in quad if uv[1] == 0.0]
+    south = [p for p, uv in quad if uv[1] == 1.0]
+    assert min(p.y() for p in north) > max(p.y() for p in south)
 
 
 def test_cache_lru_eviction(tmp_path):

@@ -37,6 +37,9 @@ class Scene:
     # once set, geodetic ↔ local-metre conversion goes through it. Terrain and
     # tiles are separate display-only objects added in later phases.
     georef: object | None = None
+    # Base-map tile layer (Track G, G1) — display-only, never welded into the
+    # mesh. Runtime state (not serialised as geometry); requires ``georef``.
+    tile_layer: object | None = None
 
     # ---- Geometry views (read-only over the *loose* mesh) -------------------
     # Tools, edits and topology operate on this (the loose geometry); groups are
@@ -90,12 +93,14 @@ class Scene:
 
     def clear(self) -> None:
         if (self.mesh.edges or self.mesh.faces or self.selection
-                or self.groups or self.dimensions or self.georef):
+                or self.groups or self.dimensions or self.georef
+                or self.tile_layer):
             self.mesh.clear()
             self.groups.clear()
             self.dimensions.clear()
             self.selection.clear()
             self.georef = None
+            self.tile_layer = None
             self.version += 1
 
     # ---- Queries ------------------------------------------------------------

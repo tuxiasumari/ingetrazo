@@ -21,15 +21,18 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QColorDialog,
     QComboBox,
     QDockWidget,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -42,6 +45,8 @@ from core.i18n import tr
 from core.mesh import Edge, Face
 from core.group import Group
 from core.dimension import Dimension
+from georef.datum import SceneDatum
+from georef.tiles import DEFAULT_SOURCE_ID, PRESETS, TileLayer, custom_source
 from tools.paint import PaintTool
 
 _TEX_DIR = Path(__file__).resolve().parent.parent / "resources" / "textures"
@@ -103,6 +108,166 @@ def _swatch_button(pm: QPixmap, tip: str) -> QToolButton:
     b.setToolTip(tip)
     b.setAutoRaise(True)
     return b
+
+
+class BaseMapPanel(QWidget):
+    """Satellite/street base map (Track G): pick a source, go to a place.
+
+    Setting a location anchors the scene datum (if unset) at that lat/lon and
+    shows the tile layer around the origin. The tiles are display-only — they
+    never enter the modelling mesh.
+    """
+
+    _CUSTOM = "__custom__"
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self._window = window
+        grid = QGridLayout(self)
+        grid.setContentsMargins(8, 6, 8, 8)
+
+        grid.addWidget(QLabel(tr("Source:")), 0, 0)
+        self._source = QComboBox()
+        for sid, src in PRESETS.items():
+            self._source.addItem(tr(src.name), sid)
+        self._source.addItem(tr("Custom XYZ…"), self._CUSTOM)
+        self._source.setCurrentIndex(
+            self._source.findData(DEFAULT_SOURCE_ID))
+        self._source.currentIndexChanged.connect(self._on_source_changed)
+        grid.addWidget(self._source, 0, 1)
+
+        self._custom_url = QLineEdit()
+        self._custom_url.setPlaceholderText("https://…/{z}/{x}/{y}.png")
+        self._custom_url.setToolTip(tr(
+            "Paste any XYZ tile URL. You assume responsibility for its terms."))
+        self._custom_url.editingFinished.connect(self._apply_source)
+        self._custom_url.setVisible(False)
+        grid.addWidget(self._custom_url, 1, 0, 1, 2)
+
+        grid.addWidget(QLabel(tr("Latitude:")), 2, 0)
+        self._lat = QDoubleSpinBox()
+        self._lat.setRange(-85.0, 85.0)
+        self._lat.setDecimals(6)
+        self._lat.setValue(-12.046400)
+        grid.addWidget(self._lat, 2, 1)
+
+        grid.addWidget(QLabel(tr("Longitude:")), 3, 0)
+        self._lon = QDoubleSpinBox()
+        self._lon.setRange(-180.0, 180.0)
+        self._lon.setDecimals(6)
+        self._lon.setValue(-77.042800)
+        grid.addWidget(self._lon, 3, 1)
+
+        grid.addWidget(QLabel(tr("Zoom:")), 4, 0)
+        self._zoom = QSpinBox()
+        self._zoom.setRange(1, 21)
+        self._zoom.setValue(16)
+        self._zoom.valueChanged.connect(self._on_zoom_changed)
+        grid.addWidget(self._zoom, 4, 1)
+
+        self._go = QPushButton(tr("Go to location"))
+        self._go.clicked.connect(self._go_to)
+        grid.addWidget(self._go, 5, 0, 1, 2)
+
+        self._show = QCheckBox(tr("Show base map"))
+        self._show.setChecked(True)
+        self._show.toggled.connect(self._on_toggle_visible)
+        grid.addWidget(self._show, 6, 0, 1, 2)
+
+        self._attribution = QLabel("")
+        self._attribution.setWordWrap(True)
+        self._attribution.setStyleSheet("color:#9aa3b2; font-size:10px; margin-top:4px;")
+        grid.addWidget(self._attribution, 7, 0, 1, 2)
+
+        self._sync_from_scene()
+
+    # ---- Source -------------------------------------------------------------
+    def _current_source(self):
+        sid = self._source.currentData()
+        if sid == self._CUSTOM:
+            url = self._custom_url.text().strip()
+            if not url:
+                return None
+            return custom_source(url, max_zoom=self._zoom.maximum())
+        return PRESETS[sid]
+
+    def _on_source_changed(self) -> None:
+        self._custom_url.setVisible(self._source.currentData() == self._CUSTOM)
+        self._apply_source()
+
+    def _apply_source(self) -> None:
+        src = self._current_source()
+        if src is None:
+            return
+        self._attribution.setText(src.attribution)
+        layer = getattr(self._window.viewport.scene, "tile_layer", None)
+        if layer is not None:
+            layer.source = src
+            self._window.viewport.reset_tiles()
+
+    def _on_zoom_changed(self, z: int) -> None:
+        layer = getattr(self._window.viewport.scene, "tile_layer", None)
+        if layer is not None:
+            layer.zoom = z
+            self._window.viewport.reset_tiles()
+
+    # ---- Location -----------------------------------------------------------
+    def _go_to(self) -> None:
+        src = self._current_source()
+        if src is None:
+            return
+        scene = self._window.viewport.scene
+        scene.georef = SceneDatum(self._lat.value(), self._lon.value())
+        scene.tile_layer = TileLayer(src, zoom=self._zoom.value())
+        scene.tile_layer.visible = self._show.isChecked()
+        self._attribution.setText(src.attribution)
+        self._window.viewport.reset_tiles()
+        self._frame_camera(scene.tile_layer.radius_m)
+
+    def _frame_camera(self, radius: float) -> None:
+        from PySide6.QtGui import QVector3D
+        vp = self._window.viewport
+        vp.camera.set_view("top")
+        vp.camera.fit_to(QVector3D(-radius, -radius, 0.0),
+                         QVector3D(radius, radius, 0.0))
+        vp.update()
+
+    def _on_toggle_visible(self, on: bool) -> None:
+        layer = getattr(self._window.viewport.scene, "tile_layer", None)
+        if layer is not None:
+            layer.visible = on
+            self._window.viewport.update()
+
+    def _sync_from_scene(self) -> None:
+        """Reflect a datum/layer already on the scene (e.g. loaded from .igz).
+
+        Widgets are updated with signals blocked so this passive sync never
+        kicks off a tile reset or a camera move — it only mirrors state.
+        """
+        from PySide6.QtCore import QSignalBlocker
+        scene = self._window.viewport.scene
+        datum = getattr(scene, "georef", None)
+        layer = getattr(scene, "tile_layer", None)
+        blockers = [QSignalBlocker(w) for w in
+                    (self._source, self._lat, self._lon, self._zoom, self._show)]
+        if datum is not None:
+            self._lat.setValue(datum.lat)
+            self._lon.setValue(datum.lon)
+        if layer is not None:
+            idx = self._source.findData(layer.source.id)
+            if idx >= 0:
+                self._source.setCurrentIndex(idx)
+            self._zoom.setValue(layer.zoom)
+            self._show.setChecked(layer.visible)
+            self._attribution.setText(layer.source.attribution)
+        else:
+            self._attribution.setText(self._current_source().attribution
+                                      if self._current_source() else "")
+        del blockers  # release the signal blockers
+        self._custom_url.setVisible(self._source.currentData() == self._CUSTOM)
+
+    def on_scene_changed(self) -> None:
+        self._sync_from_scene()
 
 
 class MaterialsPanel(QWidget):
@@ -381,6 +546,7 @@ class Tray(QDockWidget):
         self.setFeatures(QDockWidget.DockWidgetMovable
                          | QDockWidget.DockWidgetFloatable)
 
+        self.base_map = BaseMapPanel(window)
         self.materials = MaterialsPanel(window)
         self.dim_style = DimensionStylePanel(window)
         self.entity_info = EntityInfoPanel(window)
@@ -389,6 +555,7 @@ class Tray(QDockWidget):
         col = QVBoxLayout(inner)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(2)
+        col.addWidget(_Section(tr("Base map"), self.base_map))
         col.addWidget(_Section(tr("Materials"), self.materials))
         col.addWidget(_Section(tr("Dimension style"), self.dim_style))
         col.addWidget(_Section(tr("Entity info"), self.entity_info))
@@ -404,3 +571,4 @@ class Tray(QDockWidget):
         """React to a scene/version change: refresh selection-driven views."""
         self.entity_info.refresh()
         self.materials.refresh_in_model()
+        self.base_map.on_scene_changed()

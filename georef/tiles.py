@@ -20,6 +20,8 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from PySide6.QtGui import QVector3D
+
 
 # ---- Slippy-map math (Web Mercator, EPSG:3857) --------------------------------
 
@@ -108,7 +110,7 @@ class TileSource:
 PRESETS: dict[str, TileSource] = {
     "esri_imagery": TileSource(
         id="esri_imagery",
-        name="Esri World Imagery (satélite)",
+        name="Esri World Imagery (satellite)",
         url_template="https://server.arcgisonline.com/ArcGIS/rest/services/"
                      "World_Imagery/MapServer/tile/{z}/{y}/{x}",
         max_zoom=19,
@@ -126,7 +128,7 @@ PRESETS: dict[str, TileSource] = {
     ),
     "osm": TileSource(
         id="osm",
-        name="OpenStreetMap (calles)",
+        name="OpenStreetMap (streets)",
         url_template="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
         max_zoom=19,
         attribution="© OpenStreetMap contributors",
@@ -145,6 +147,55 @@ def custom_source(url_template: str, max_zoom: int = 19) -> TileSource:
         max_zoom=max_zoom,
         attribution="Fuente personalizada (definida por el usuario)",
     )
+
+
+# ---- Tile layer (display-only scene object) -----------------------------------
+
+class TileLayer:
+    """The base-map layer: a chosen :class:`TileSource` shown as flat Z=0 quads.
+
+    Display-only — **never** part of ``Scene.mesh`` (invariant #2). It knows
+    which tiles cover the area around the scene datum and how to project each
+    tile's geodetic bounding box into local scene metres. Decoded images (from
+    the fetcher) are stashed in :attr:`images`; the viewport turns those into GL
+    textures. In G1 every quad sits at Z=0; G2 will drape them over terrain.
+    """
+
+    def __init__(self, source: TileSource, zoom: int = 16,
+                 radius_m: float = 1200.0) -> None:
+        self.source = source
+        self.zoom = int(zoom)
+        self.radius_m = float(radius_m)
+        self.visible = True
+        # (x, y, z) -> QImage, populated asynchronously by the fetcher.
+        self.images: dict[tuple[int, int, int], object] = {}
+
+    def visible_tiles(self, datum) -> list[tuple[int, int]]:
+        """Tile indices covering a ``±radius_m`` square around the datum."""
+        r = self.radius_m
+        lats, lons = [], []
+        for lx, ly in ((-r, -r), (r, -r), (r, r), (-r, r)):
+            la, lo, _ = datum.local_to_geodetic(QVector3D(lx, ly, 0.0))
+            lats.append(la)
+            lons.append(lo)
+        return tiles_covering(min(lats), min(lons), max(lats), max(lons), self.zoom)
+
+    def quad_local(self, datum, x: int, y: int):
+        """Tile ``(x, y)`` as two Z=0 triangles in local metres.
+
+        Returns a list of ``(QVector3D position, (u, v))`` pairs — 6 vertices,
+        two triangles, with UVs so the tile image's north edge maps to the +Y
+        (north) side of the quad.
+        """
+        lat_s, lon_w, lat_n, lon_e = tile_bbox(x, y, self.zoom)
+        nw = datum.geodetic_to_local(lat_n, lon_w)
+        ne = datum.geodetic_to_local(lat_n, lon_e)
+        se = datum.geodetic_to_local(lat_s, lon_e)
+        sw = datum.geodetic_to_local(lat_s, lon_w)
+        return [
+            (nw, (0.0, 0.0)), (ne, (1.0, 0.0)), (se, (1.0, 1.0)),
+            (nw, (0.0, 0.0)), (se, (1.0, 1.0)), (sw, (0.0, 1.0)),
+        ]
 
 
 # ---- Disk cache (LRU) ---------------------------------------------------------

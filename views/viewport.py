@@ -335,6 +335,13 @@ class Viewport(QOpenGLWidget):
         # Numeric value buffer (VCB-style typed length).
         self._value_buffer = ""
 
+        # Base-map tiles (Track G, G1). The fetcher is created lazily (needs a
+        # running app); GL textures are cached per tile, keyed by (source, x,y,z).
+        self._tile_fetcher = None
+        self._tile_textures: dict = {}
+        self._tile_quad_vao = None
+        self._tile_quad_vbo = None
+
     # ---- GL lifecycle -------------------------------------------------------
     def initializeGL(self) -> None:
         self._gl = QOpenGLFunctions(self.context())
@@ -372,6 +379,7 @@ class Viewport(QOpenGLWidget):
         self._silhouette_vao, self._silhouette_vbo = self._create_dynamic()
         self._rubber_vao, self._rubber_vbo = self._create_dynamic()
         self._preview_faces_vao, self._preview_faces_vbo = self._create_dynamic()
+        self._tile_quad_vao, self._tile_quad_vbo = self._create_dynamic_uv()
 
     def resizeGL(self, w: int, h: int) -> None:
         # Qt passes framebuffer-pixel sizes here (already scaled by DPR), so
@@ -432,6 +440,11 @@ class Viewport(QOpenGLWidget):
         # Solid-colour by default; the textured-face pass flips this on.
         self._program.setUniformValue(self._loc_use_tex, 0)
         self._program.setUniformValue(self._loc_tex, 0)  # sampler → unit 0
+
+        # Base-map tiles (Track G) — the ground image, drawn before the grid so
+        # the grid lines read on top of the imagery. Depth-write OFF: it's a
+        # backdrop, geometry always draws over it.
+        self._render_tiles()
 
         # Grid — depth-tested (so geometry hides it) but depth-write OFF, so
         # grid lines don't pollute the depth buffer at z=0 and accidentally
@@ -675,6 +688,95 @@ class Viewport(QOpenGLWidget):
 
     def _set_color(self, r: float, g: float, b: float, a: float) -> None:
         self._program.setUniformValue(self._loc_color, QVector4D(r, g, b, a))
+
+    # ---- Base-map tiles (Track G) -------------------------------------------
+    def _ensure_tile_fetcher(self):
+        """Create the tile fetcher on first use (needs a running app)."""
+        if self._tile_fetcher is None:
+            from georef.tile_fetcher import TileFetcher
+            self._tile_fetcher = TileFetcher(parent=self)
+            self._tile_fetcher.tileReady.connect(self._on_tile_ready)
+        return self._tile_fetcher
+
+    def _on_tile_ready(self, source_id, x, y, z, image) -> None:
+        """A downloaded tile arrived: stash its image and schedule a repaint."""
+        layer = getattr(self.scene, "tile_layer", None)
+        if (layer is not None and layer.source.id == source_id
+                and z == layer.zoom):
+            layer.images[(x, y, z)] = image
+            self.update()
+
+    def reset_tiles(self) -> None:
+        """Drop cached GL textures + pending images (source/datum changed)."""
+        if self._tile_textures:
+            # Destroying GL textures needs the context current — this runs from
+            # the Tray, not paintGL.
+            self.makeCurrent()
+            try:
+                for tex in self._tile_textures.values():
+                    if tex is not None:
+                        tex.destroy()
+            finally:
+                self.doneCurrent()
+        self._tile_textures.clear()
+        if self._tile_fetcher is not None:
+            self._tile_fetcher.cancel_all()
+        layer = getattr(self.scene, "tile_layer", None)
+        if layer is not None:
+            layer.images.clear()
+        self.update()
+
+    def _tile_texture(self, layer, x, y):
+        """GL texture for tile ``(x, y)`` of ``layer``, or ``None`` if not yet
+        available (a download is kicked off and the frame repaints on arrival)."""
+        z = layer.zoom
+        key = (layer.source.id, x, y, z)
+        if key in self._tile_textures:
+            return self._tile_textures[key]
+        img = layer.images.get((x, y, z))
+        if img is None:
+            # Cache hit returns the image synchronously; a miss returns None and
+            # starts an async download (see _on_tile_ready).
+            img = self._ensure_tile_fetcher().request(layer.source, x, y, z)
+            if img is None:
+                return None
+            layer.images[(x, y, z)] = img
+        tex = QOpenGLTexture(img)  # QImage is top-down; our UVs map north→v=0
+        tex.setWrapMode(QOpenGLTexture.ClampToEdge)
+        tex.setMinificationFilter(QOpenGLTexture.LinearMipMapLinear)
+        tex.setMagnificationFilter(QOpenGLTexture.Linear)
+        self._tile_textures[key] = tex
+        return tex
+
+    def _render_tiles(self) -> None:
+        layer = getattr(self.scene, "tile_layer", None)
+        datum = getattr(self.scene, "georef", None)
+        if layer is None or datum is None or not getattr(layer, "visible", False):
+            return
+        try:
+            tiles = layer.visible_tiles(datum)
+        except Exception:
+            return
+        self._program.setUniformValue(self._loc_use_tex, 1)
+        self._gl.glDepthMask(GL_FALSE)
+        self._tile_quad_vao.bind()
+        for (x, y) in tiles:
+            tex = self._tile_texture(layer, x, y)
+            if tex is None:
+                continue
+            raw = array("f")
+            for pos, (u, v) in layer.quad_local(datum, x, y):
+                raw.extend([pos.x(), pos.y(), pos.z(), u, v])
+            data = raw.tobytes()
+            self._tile_quad_vbo.bind()
+            self._tile_quad_vbo.allocate(data, len(data))
+            self._tile_quad_vbo.release()
+            tex.bind(0)
+            self._gl.glDrawArrays(GL_TRIANGLES, 0, 6)
+            tex.release(0)
+        self._tile_quad_vao.release()
+        self._gl.glDepthMask(GL_TRUE)
+        self._program.setUniformValue(self._loc_use_tex, 0)
 
     # ---- Dynamic uploads ----------------------------------------------------
     def notify_scene_changed(self) -> None:
