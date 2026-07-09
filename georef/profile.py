@@ -132,10 +132,36 @@ def order_polyline(edges) -> list[QVector3D] | None:
 
 
 def polyline_from_selection(scene) -> list[QVector3D] | None:
-    """Ordered polyline from the edges currently selected, or ``None``."""
+    """Ordered polyline grown from the selected edges, or ``None``.
+
+    A "polyline" is just a chain of connected line segments (drawn with the Line
+    tool) — there is no separate polyline tool. To spare the user selecting
+    every segment, the selection is **grown to its connected component** through
+    shared vertices: selecting any one segment of a traced path profiles the
+    whole path. If that component branches, :func:`order_polyline` rejects it.
+    """
+    from collections import defaultdict
     from core.mesh import Edge
-    edges = [e for e in scene.selection if isinstance(e, Edge)]
-    return order_polyline(edges)
+
+    seed = [e for e in scene.selection if isinstance(e, Edge)]
+    if not seed:
+        return None
+
+    v2e: dict = defaultdict(list)
+    for e in scene.mesh.edges:
+        v2e[e.v0].append(e)
+        v2e[e.v1].append(e)
+
+    component: set = set(seed)
+    frontier = list(seed)
+    while frontier:
+        e = frontier.pop()
+        for v in (e.v0, e.v1):
+            for nbr in v2e[v]:
+                if nbr not in component:
+                    component.add(nbr)
+                    frontier.append(nbr)
+    return order_polyline(component)
 
 
 # ---- Geometry helpers ----------------------------------------------------------

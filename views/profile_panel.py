@@ -217,8 +217,9 @@ class ProfileDock(QDockWidget):
             return
         poly = polyline_from_selection(scene)
         if poly is None or len(poly) < 2:
-            self.view.set_message(
-                tr("Select a simple polyline (connected edges) to profile."))
+            self.view.set_message(tr(
+                "Draw a path with the Line tool (L), select one of its "
+                "segments, then run Profile."))
             self._polyline = None
             return
         self._ensure_sampler(datum)

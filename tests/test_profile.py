@@ -77,6 +77,23 @@ def test_polyline_from_selection():
     assert pts is not None and len(pts) == 3
 
 
+def test_polyline_from_selection_grows_to_whole_chain():
+    # Selecting ONE segment profiles the whole connected polyline.
+    scene = Scene()
+    scene.mesh.add_edge(V(0, 0), V(10, 0))
+    mid = scene.mesh.add_edge(V(10, 0), V(20, 0))
+    scene.mesh.add_edge(V(20, 0), V(30, 0))
+    scene.selection.add(mid)                      # only the middle segment
+    pts = polyline_from_selection(scene)
+    assert pts is not None and len(pts) == 4      # grew to all 3 edges
+    xs = sorted(round(p.x()) for p in pts)
+    assert xs == [0, 10, 20, 30]
+
+
+def test_polyline_from_selection_empty():
+    assert polyline_from_selection(Scene()) is None
+
+
 # ---- Chainage geometry ---------------------------------------------------------
 
 def test_polyline_length_horizontal():

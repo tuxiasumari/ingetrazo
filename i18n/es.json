@@ -186,7 +186,7 @@
   "Export CSV…": "Exportar CSV…",
   "Export image…": "Exportar imagen…",
   "Set a base map location first (Tray ▸ Base map).": "Fijá primero una ubicación de mapa base (Bandeja ▸ Mapa base).",
-  "Select a simple polyline (connected edges) to profile.": "Seleccioná una polilínea simple (aristas conectadas) para el perfil.",
+  "Draw a path with the Line tool (L), select one of its segments, then run Profile.": "Dibujá un trazo con la herramienta Línea (L), seleccioná uno de sus segmentos y ejecutá Perfil.",
   "Length {len} m · Δh {span} m · gain {gain} m · vert. exag. ×{exag}": "Largo {len} m · Δh {span} m · desnivel {gain} m · exag. vert. ×{exag}",
   "(loading DEM…)": "(cargando DEM…)",
   "Export profile CSV": "Exportar CSV del perfil",
