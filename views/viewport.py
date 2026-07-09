@@ -449,12 +449,17 @@ class Viewport(QOpenGLWidget):
         # Grid — depth-tested (so geometry hides it) but depth-write OFF, so
         # grid lines don't pollute the depth buffer at z=0 and accidentally
         # cull the bottom face of a freshly extruded box where they overlap.
-        self._gl.glDepthMask(GL_FALSE)
-        self._set_color(0.78, 0.80, 0.84, 1.0)
-        self._grid_vao.bind()
-        self._gl.glDrawArrays(GL_LINES, 0, self._grid_count)
-        self._grid_vao.release()
-        self._gl.glDepthMask(GL_TRUE)
+        # Hidden while the base map is showing: the modelling grid is a fixed
+        # 100 m square meant for object-scale work, so at km-scale map views it
+        # collapses into a noisy dense patch. Over terrain the map *is* the
+        # ground reference (like Google Earth / SketchUp geo-location).
+        if not self._base_map_showing():
+            self._gl.glDepthMask(GL_FALSE)
+            self._set_color(0.78, 0.80, 0.84, 1.0)
+            self._grid_vao.bind()
+            self._gl.glDrawArrays(GL_LINES, 0, self._grid_count)
+            self._grid_vao.release()
+            self._gl.glDepthMask(GL_TRUE)
 
         # Persistent edges + faces
         self._sync_edges()
@@ -690,6 +695,12 @@ class Viewport(QOpenGLWidget):
         self._program.setUniformValue(self._loc_color, QVector4D(r, g, b, a))
 
     # ---- Base-map tiles (Track G) -------------------------------------------
+    def _base_map_showing(self) -> bool:
+        """True when a georeferenced base map is currently visible."""
+        layer = getattr(self.scene, "tile_layer", None)
+        return (layer is not None and getattr(layer, "visible", False)
+                and getattr(self.scene, "georef", None) is not None)
+
     def _ensure_tile_fetcher(self):
         """Create the tile fetcher on first use (needs a running app)."""
         if self._tile_fetcher is None:
