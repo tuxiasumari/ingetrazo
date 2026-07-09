@@ -1935,23 +1935,6 @@ class Viewport(QOpenGLWidget):
                     face_at_click.centroid(),
                     face_at_click.normal(),
                 )
-            # Tracing on the base map (Track G): a first click on empty map
-            # ground locks the whole trace to the Z=0 ground plane, so it lies
-            # flat on the imagery even from a tilted camera (the near-horizon
-            # rule would otherwise stand the trace up on a vertical plane). This
-            # is the hook G2 will replace with terrain-height sampling.
-            elif (
-                not had_start
-                and now_start is not None
-                and face_at_click is None
-                and hasattr(self.active_tool, "work_plane")
-                and not getattr(self.active_tool, "prefers_vertical_drag", False)
-                and self._base_map_showing()
-            ):
-                self.active_tool.work_plane = (
-                    QVector3D(0.0, 0.0, 0.0),
-                    QVector3D(0.0, 0.0, 1.0),
-                )
             # Any pending typed value is invalidated once the user
             # commits a point with the mouse.
             self._set_value_buffer("")

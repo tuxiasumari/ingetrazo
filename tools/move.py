@@ -132,13 +132,6 @@ class MoveTool(Tool):
             group = viewport.pick_group(ctx.screen.x(), ctx.screen.y())
             if group is not None:
                 return group, []
-            # A vertex (corner / polyline node) under the cursor moves alone, so
-            # the adjacent segments stretch to follow — this is how you nudge a
-            # break point of a traced path. Endpoints win over the edge span,
-            # SketchUp-style.
-            vertex = viewport.pick_vertex(ctx.screen.x(), ctx.screen.y())
-            if vertex is not None:
-                return None, self._dedup([vertex])
             edge = viewport.pick_edge(ctx.screen.x(), ctx.screen.y())
             if edge is not None:
                 entities = [edge]
