@@ -25,9 +25,9 @@ from PySide6.QtWidgets import (
 
 from core.i18n import tr
 from georef.profile import (
-    polyline_from_selection,
     profile_to_csv,
     sample_profile,
+    selected_geopath,
 )
 
 
@@ -61,8 +61,11 @@ class ProfileView(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setMinimumHeight(170)
+        self.setMouseTracking(True)   # hover the profile to read the station
         self._profile = None
         self._message = tr("Select a polyline and click “Profile”.")
+        self._plot = None             # last plot geometry, for cursor mapping
+        self._cursor_station = None   # station (m) under the mouse, or None
 
     def set_profile(self, profile) -> None:
         self._profile = profile
@@ -73,6 +76,38 @@ class ProfileView(QWidget):
         self._profile = None
         self._message = text
         self.update()
+
+    # ---- Progresiva (station) readout on hover ------------------------------
+    def mouseMoveEvent(self, ev) -> None:
+        if self._plot is None or self._profile is None:
+            return
+        left, right, length = self._plot["left"], self._plot["right"], self._plot["length"]
+        x = ev.position().x()
+        if left <= x <= right and right > left:
+            self._cursor_station = (x - left) / (right - left) * length
+        else:
+            self._cursor_station = None
+        self.update()
+
+    def leaveEvent(self, _ev) -> None:
+        self._cursor_station = None
+        self.update()
+
+    def _elevation_at_station(self, s: float):
+        """Interpolated elevation at chainage ``s`` from the sampled profile."""
+        samples = self._profile.samples
+        for a, b in zip(samples, samples[1:]):
+            if a.station <= s <= b.station and a.elevation is not None \
+                    and b.elevation is not None:
+                span = b.station - a.station
+                t = (s - a.station) / span if span > 1e-9 else 0.0
+                return a.elevation + (b.elevation - a.elevation) * t
+        return None
+
+    @staticmethod
+    def _fmt_station(s: float) -> str:
+        """Civil chainage format, e.g. 1450 m → ``1+450``."""
+        return f"{int(s // 1000)}+{s % 1000:06.2f}"
 
     # ---- Painting -----------------------------------------------------------
     def paintEvent(self, _ev) -> None:
@@ -108,6 +143,10 @@ class ProfileView(QWidget):
 
         def sy(elev):
             return bottom - (elev - elo) / (ehi - elo) * ph
+
+        # Remember the plot geometry so hover can map cursor → station.
+        self._plot = {"left": left, "right": right, "top": top,
+                      "bottom": bottom, "length": length, "elo": elo, "ehi": ehi}
 
         # Grid + labels.
         p.setPen(QPen(QColor(210, 214, 220), 1))
@@ -165,6 +204,29 @@ class ProfileView(QWidget):
             head += "  " + tr("(loading DEM…)")
         p.drawText(QPointF(left, top - 8), head)
 
+        # Progresiva cursor: vertical line + station/elevation readout on hover.
+        s = self._cursor_station
+        if s is not None:
+            cx = sx(s)
+            elev = self._elevation_at_station(s)
+            p.setPen(QPen(QColor(243, 115, 41), 1, Qt.DashLine))
+            p.drawLine(QPointF(cx, top), QPointF(cx, bottom))
+            if elev is not None:
+                cy = sy(elev)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(243, 115, 41))
+                p.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
+                p.setBrush(Qt.NoBrush)
+                label = tr("Prog {sta} · {elev} m").format(
+                    sta=self._fmt_station(s), elev=f"{elev:.1f}")
+                fm = p.fontMetrics()
+                tw = fm.horizontalAdvance(label)
+                tx = min(max(cx + 6, left), right - tw)
+                p.setPen(QColor(255, 255, 255))
+                p.fillRect(int(tx) - 2, top + 1, tw + 4, fm.height() + 2,
+                           QColor(243, 115, 41))
+                p.drawText(QPointF(tx, top + fm.height() - 1), label)
+
 
 class ProfileDock(QDockWidget):
     """Bottom dock: the profile view plus compute / export controls."""
@@ -176,7 +238,7 @@ class ProfileDock(QDockWidget):
 
         self._sampler = None
         self._sampler_datum = None
-        self._polyline = None
+        self._geopath = None      # the GeoPath currently being profiled
 
         self.view = ProfileView()
         bar = QHBoxLayout()
@@ -215,51 +277,45 @@ class ProfileDock(QDockWidget):
         if datum is None:
             self.view.set_message(tr("Set a base map location first (Tray ▸ Base map)."))
             return
-        poly = polyline_from_selection(scene)
-        if poly is None or len(poly) < 2:
+        path = selected_geopath(scene)
+        if path is None or len(path.points) < 2:
             self.view.set_message(tr(
-                "Draw a path with the Line tool (L), select one of its "
-                "segments, then run Profile."))
-            self._polyline = None
+                "Trace a path with the Path tool (T), select it, then run "
+                "Profile."))
+            self._geopath = None
             return
         self._ensure_sampler(datum)
-        self._polyline = poly
+        self._geopath = path
         self.view.set_message(tr("Loading terrain…"))
         self._recompute()
 
     def _recompute(self) -> None:
-        if not self._polyline or self._sampler is None:
+        if self._geopath is None or self._sampler is None:
             return
-        profile = sample_profile(self._polyline, self._sampler)
+        profile = sample_profile(self._geopath.profile_points(), self._sampler)
         self.view.set_profile(profile)
 
     def on_scene_changed(self) -> None:
-        """Live update: re-profile the current selection when the trace edits.
+        """Live update: re-profile the active path when its nodes move.
 
-        Only while the dock is visible and a polyline is being profiled; the
-        selection is re-read so a moved vertex reshapes the profile.
+        Only while the dock is visible and a path is being profiled — moving a
+        node bumps the scene version and reshapes the profile in place.
         """
-        if not self.isVisible() or self._polyline is None:
+        if not self.isVisible() or self._geopath is None:
             return
         scene = self._window.viewport.scene
-        datum = getattr(scene, "georef", None)
-        if datum is None:
-            return
-        poly = polyline_from_selection(scene)
-        if poly is not None and len(poly) >= 2:
-            self._ensure_sampler(datum)
-            self._polyline = poly
+        if self._geopath in scene.geo_paths and self._sampler is not None:
             self._recompute()
 
     # ---- Export -------------------------------------------------------------
     def _export_csv(self) -> None:
-        if not self._polyline or self._sampler is None:
+        if self._geopath is None or self._sampler is None:
             return
         path, _ = QFileDialog.getSaveFileName(
             self, tr("Export profile CSV"), "profile.csv", "CSV (*.csv)")
         if not path:
             return
-        profile = sample_profile(self._polyline, self._sampler)
+        profile = sample_profile(self._geopath.profile_points(), self._sampler)
         with open(path, "w", encoding="utf-8") as f:
             f.write(profile_to_csv(profile))
 

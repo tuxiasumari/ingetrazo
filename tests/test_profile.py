@@ -8,16 +8,15 @@ import math
 
 from PySide6.QtGui import QVector3D
 
-from core.mesh import Mesh
 from core.scene import Scene
 from georef.datum import SceneDatum
+from georef.geopath import GeoPath
 from georef.profile import (
-    order_polyline,
     point_at_station,
-    polyline_from_selection,
     polyline_length,
     profile_to_csv,
     sample_profile,
+    selected_geopath,
 )
 
 
@@ -40,58 +39,37 @@ class StubSampler:
         return self._fn(p.x(), p.y())
 
 
-# ---- Polyline ordering ---------------------------------------------------------
+# ---- Path source (which GeoPath to profile) ------------------------------------
 
-def test_order_open_chain():
-    m = Mesh()
-    m.add_edge(V(0, 0), V(10, 0))
-    m.add_edge(V(10, 0), V(10, 10))  # shares the welded (10,0) vertex
-    pts = order_polyline(m.edges)
-    assert pts is not None
-    xs = [(round(p.x()), round(p.y())) for p in pts]
-    assert xs[0] == (0, 0) and xs[-1] == (10, 10)
-    assert len(xs) == 3
-
-
-def test_order_rejects_branch():
-    m = Mesh()
-    m.add_edge(V(0, 0), V(5, 0))
-    m.add_edge(V(5, 0), V(10, 0))
-    m.add_edge(V(5, 0), V(5, 5))   # a T-branch at (5,0)
-    assert order_polyline(m.edges) is None
-
-
-def test_order_rejects_disconnected():
-    m = Mesh()
-    m.add_edge(V(0, 0), V(1, 0))
-    m.add_edge(V(5, 5), V(6, 5))   # separate component
-    assert order_polyline(m.edges) is None
-
-
-def test_polyline_from_selection():
+def test_selected_geopath_single_selection():
     scene = Scene()
-    e1 = scene.mesh.add_edge(V(0, 0), V(10, 0))
-    e2 = scene.mesh.add_edge(V(10, 0), V(20, 0))
-    scene.selection.update({e1, e2})
-    pts = polyline_from_selection(scene)
-    assert pts is not None and len(pts) == 3
+    p1 = GeoPath([V(0, 0), V(10, 0)])
+    p2 = GeoPath([V(0, 5), V(10, 5)])
+    scene.geo_paths.extend([p1, p2])
+    scene.selection.add(p1)
+    assert selected_geopath(scene) is p1
 
 
-def test_polyline_from_selection_grows_to_whole_chain():
-    # Selecting ONE segment profiles the whole connected polyline.
+def test_selected_geopath_falls_back_to_only_path():
     scene = Scene()
-    scene.mesh.add_edge(V(0, 0), V(10, 0))
-    mid = scene.mesh.add_edge(V(10, 0), V(20, 0))
-    scene.mesh.add_edge(V(20, 0), V(30, 0))
-    scene.selection.add(mid)                      # only the middle segment
-    pts = polyline_from_selection(scene)
-    assert pts is not None and len(pts) == 4      # grew to all 3 edges
-    xs = sorted(round(p.x()) for p in pts)
-    assert xs == [0, 10, 20, 30]
+    only = GeoPath([V(0, 0), V(10, 0)])
+    scene.geo_paths.append(only)
+    assert selected_geopath(scene) is only        # no selection, one path
 
 
-def test_polyline_from_selection_empty():
-    assert polyline_from_selection(Scene()) is None
+def test_selected_geopath_none_when_ambiguous():
+    scene = Scene()
+    scene.geo_paths.extend([GeoPath([V(0, 0), V(1, 0)]),
+                            GeoPath([V(0, 1), V(1, 1)])])
+    assert selected_geopath(scene) is None         # two paths, none selected
+
+
+def test_sample_profile_from_geopath_points():
+    datum = SceneDatum(-12.0464, -77.0428)
+    sampler = StubSampler(datum, lambda x, y: x * 0.5)
+    path = GeoPath([V(0, 0), V(100, 0)])
+    profile = sample_profile(path.profile_points(), sampler, spacing=10.0)
+    assert abs(profile.samples[-1].elevation - 50.0) < 1e-6
 
 
 # ---- Chainage geometry ---------------------------------------------------------

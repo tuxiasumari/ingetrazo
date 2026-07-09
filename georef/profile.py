@@ -18,7 +18,6 @@ once the sampler emits ``changed``.
 from __future__ import annotations
 
 import math
-from collections import defaultdict
 from dataclasses import dataclass, field
 
 from PySide6.QtGui import QVector3D
@@ -75,93 +74,21 @@ class Profile:
         return out
 
 
-# ---- Polyline ordering ---------------------------------------------------------
+# ---- Path source ---------------------------------------------------------------
 
-def order_polyline(edges) -> list[QVector3D] | None:
-    """Order a set of mesh edges into a single polyline of positions.
+def selected_geopath(scene):
+    """The :class:`~georef.geopath.GeoPath` to profile from the scene, or None.
 
-    Adjacency is by shared-vertex identity (``Edge.v0``/``v1``). Returns the
-    ordered vertex positions for a simple open chain (two endpoints) or closed
-    loop (no endpoints); ``None`` if the selection branches or is disconnected —
-    a profile needs an unambiguous path.
+    Prefers a single selected path; falls back to the only path in the scene so
+    the common "one traced road" case profiles without an explicit selection.
     """
-    edges = list(edges)
-    if not edges:
-        return None
-    adj: dict = defaultdict(list)
-    verts = set()
-    for e in edges:
-        adj[e.v0].append(e.v1)
-        adj[e.v1].append(e.v0)
-        verts.add(e.v0)
-        verts.add(e.v1)
-    # Any vertex touching more than two edges → ambiguous path.
-    if any(len(adj[v]) > 2 for v in verts):
-        return None
-    endpoints = [v for v in verts if len(adj[v]) == 1]
-
-    def _pos_key(v):
-        p = v.position
-        return (round(p.x(), 6), round(p.y(), 6), round(p.z(), 6))
-
-    if len(endpoints) == 2:
-        # Deterministic orientation (lower x,y,z is the start) so the profile
-        # doesn't mirror between recomputes during live edits.
-        start = min(endpoints, key=_pos_key)
-    elif not endpoints:
-        start = min(verts, key=_pos_key)   # closed loop — stable seed
-    else:
-        return None                        # dangling / disconnected
-    ordered = [start]
-    prev, curr = None, start
-    for _ in range(len(edges)):
-        nbrs = [n for n in adj[curr] if n is not prev]
-        if not nbrs:
-            break
-        nxt = nbrs[0]
-        ordered.append(nxt)
-        prev, curr = curr, nxt
-        if curr is start:                  # closed the loop
-            break
-    positions = [v.position for v in ordered]
-    # A disconnected selection walks only its first component — reject if we
-    # didn't reach every vertex.
-    if len(set(id(v) for v in ordered)) < len(verts):
-        return None
-    return positions
-
-
-def polyline_from_selection(scene) -> list[QVector3D] | None:
-    """Ordered polyline grown from the selected edges, or ``None``.
-
-    A "polyline" is just a chain of connected line segments (drawn with the Line
-    tool) — there is no separate polyline tool. To spare the user selecting
-    every segment, the selection is **grown to its connected component** through
-    shared vertices: selecting any one segment of a traced path profiles the
-    whole path. If that component branches, :func:`order_polyline` rejects it.
-    """
-    from collections import defaultdict
-    from core.mesh import Edge
-
-    seed = [e for e in scene.selection if isinstance(e, Edge)]
-    if not seed:
-        return None
-
-    v2e: dict = defaultdict(list)
-    for e in scene.mesh.edges:
-        v2e[e.v0].append(e)
-        v2e[e.v1].append(e)
-
-    component: set = set(seed)
-    frontier = list(seed)
-    while frontier:
-        e = frontier.pop()
-        for v in (e.v0, e.v1):
-            for nbr in v2e[v]:
-                if nbr not in component:
-                    component.add(nbr)
-                    frontier.append(nbr)
-    return order_polyline(component)
+    from georef.geopath import GeoPath
+    sel = [p for p in scene.selection if isinstance(p, GeoPath)]
+    if len(sel) == 1:
+        return sel[0]
+    if not sel and len(getattr(scene, "geo_paths", [])) == 1:
+        return scene.geo_paths[0]
+    return None
 
 
 # ---- Geometry helpers ----------------------------------------------------------
