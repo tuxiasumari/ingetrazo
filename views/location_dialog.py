@@ -177,7 +177,7 @@ class MapPicker(QWidget):
     # ---- Interaction --------------------------------------------------------
     # Max drawable capture area (km²). Caps by *area*, not per side, so a long
     # thin road strip is fine while a huge block is clamped.
-    _MAX_AREA_KM2 = 400.0
+    _MAX_AREA_KM2 = 100.0
 
     def _clamp_ll(self, la0, lo0, la, lo):
         """Clamp corner ``(la, lo)`` (anchored at ``la0, lo0``) so the rectangle

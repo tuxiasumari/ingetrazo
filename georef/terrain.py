@@ -27,32 +27,36 @@ class TerrainObject:
     """A draped-terrain patch: grid vertices, UVs, triangles, and its texture."""
 
     def __init__(self, vertices, uvs, triangles, tile_range,
-                 grid_n=0, radius=0.0) -> None:
+                 nx=0, ny=0, bbox=(0.0, 0.0, 0.0, 0.0)) -> None:
         self.vertices = vertices          # list[QVector3D] local metres
         self.uvs = uvs                    # list[(u, v)] into the mosaic
         self.triangles = triangles        # list[(i, j, k)] indices
         self.tile_range = tile_range      # (tx0, ty0, ntx, nty, zoom)
-        self.grid_n = grid_n              # grid is grid_n × grid_n
-        self.radius = radius              # spans ±radius in x and y
+        self.nx = nx                      # grid columns (x / east)
+        self.ny = ny                      # grid rows (y / north)
+        self.bbox = bbox                  # (minx, miny, maxx, maxy) local metres
         self.visible = True
         self.texture_image = None         # QImage mosaic (set by build_mosaic)
 
     def height_at(self, x: float, y: float) -> float | None:
         """Bilinearly interpolated terrain Z at local ``(x, y)``, or ``None`` if
-        outside the patch. Used to drape routes/markers onto the relief."""
-        n, r = self.grid_n, self.radius
-        if n < 2 or r <= 0 or not (-r <= x <= r and -r <= y <= r):
+        outside the captured area. Used to drape routes/markers onto the relief."""
+        nx, ny = self.nx, self.ny
+        minx, miny, maxx, maxy = self.bbox
+        if nx < 2 or ny < 2 or maxx <= minx or maxy <= miny:
             return None
-        fi = (x + r) / (2 * r) * (n - 1)       # column (x: -r..r → 0..n-1)
-        fj = (r - y) / (2 * r) * (n - 1)       # row 0 is north (+y)
-        i0 = max(0, min(n - 2, int(fi)))
-        j0 = max(0, min(n - 2, int(fj)))
+        if not (minx <= x <= maxx and miny <= y <= maxy):
+            return None
+        fi = (x - minx) / (maxx - minx) * (nx - 1)     # column (east)
+        fj = (maxy - y) / (maxy - miny) * (ny - 1)     # row 0 = north (+y)
+        i0 = max(0, min(nx - 2, int(fi)))
+        j0 = max(0, min(ny - 2, int(fj)))
         tx, ty = fi - i0, fj - j0
         z = self.vertices
-        z00 = z[j0 * n + i0].z()
-        z10 = z[j0 * n + i0 + 1].z()
-        z01 = z[(j0 + 1) * n + i0].z()
-        z11 = z[(j0 + 1) * n + i0 + 1].z()
+        z00 = z[j0 * nx + i0].z()
+        z10 = z[j0 * nx + i0 + 1].z()
+        z01 = z[(j0 + 1) * nx + i0].z()
+        z11 = z[(j0 + 1) * nx + i0 + 1].z()
         top = z00 * (1 - tx) + z10 * tx
         bot = z01 * (1 - tx) + z11 * tx
         return top * (1 - ty) + bot * ty
@@ -67,25 +71,34 @@ class TerrainObject:
                 QVector3D(max(xs), max(ys), max(zs)))
 
 
-def _bbox_ll(datum, radius: float):
-    """Geodetic bbox of the ``±radius`` local square around the datum."""
+def _bbox_ll(datum, bbox):
+    """Geodetic bbox of a local-metre ``(minx, miny, maxx, maxy)`` rectangle."""
+    minx, miny, maxx, maxy = bbox
     lats, lons = [], []
-    for lx, ly in ((-radius, -radius), (radius, -radius),
-                   (radius, radius), (-radius, radius)):
+    for lx, ly in ((minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)):
         la, lo, _ = datum.local_to_geodetic(QVector3D(lx, ly, 0.0))
         lats.append(la)
         lons.append(lo)
     return min(lats), min(lons), max(lats), max(lons)
 
 
-def build_terrain(datum, sampler, ground_ref: float, radius_m: float = 1200.0,
-                  grid_n: int = 96, zoom: int = 15):
-    """Grid terrain over ``±radius_m`` around the datum, lifted to the DEM.
+def build_terrain(datum, sampler, ground_ref: float, bbox,
+                  target_cell_m: float = 40.0, max_grid: int = 180, zoom: int = 15):
+    """DEM-lifted terrain grid over the captured ``bbox`` (local-metre
+    ``(minx, miny, maxx, maxy)``), so the 3D terrain matches the area you drew.
 
-    Returns a :class:`TerrainObject` (without its mosaic image yet), or ``None``
-    if the DEM isn't fully loaded. UVs index the tile mosaic for :func:`build_mosaic`.
+    Grid density follows the extent at ~``target_cell_m`` per cell, capped at
+    ``max_grid`` per axis (bounds the vertex count — a long strip gets a long
+    thin grid). Returns ``None`` if the DEM isn't fully loaded.
     """
-    lat_s, lon_w, lat_n, lon_e = _bbox_ll(datum, radius_m)
+    minx, miny, maxx, maxy = bbox
+    w, h = maxx - minx, maxy - miny
+    if w <= 0 or h <= 0:
+        return None
+    nx = max(2, min(max_grid, int(round(w / target_cell_m)) + 1))
+    ny = max(2, min(max_grid, int(round(h / target_cell_m)) + 1))
+
+    lat_s, lon_w, lat_n, lon_e = _bbox_ll(datum, bbox)
     tiles = tiles_covering(lat_s, lon_w, lat_n, lon_e, zoom)
     if not tiles:
         return None
@@ -94,32 +107,30 @@ def build_terrain(datum, sampler, ground_ref: float, radius_m: float = 1200.0,
     ntx = max(t[0] for t in tiles) - tx0 + 1
     nty = max(t[1] for t in tiles) - ty0 + 1
 
-    n = max(2, grid_n)
     verts, uvs = [], []
-    for j in range(n):
-        # Row 0 is the north edge (+Y), matching image row 0 = north.
-        y = radius_m - 2 * radius_m * j / (n - 1)
-        for i in range(n):
-            x = -radius_m + 2 * radius_m * i / (n - 1)
+    for j in range(ny):
+        y = maxy - h * j / (ny - 1)            # row 0 = north edge (+Y)
+        for i in range(nx):
+            x = minx + w * i / (nx - 1)
             e = sampler.elevation_at_local(QVector3D(x, y, 0.0))
             if e is None:
-                return None                        # DEM not ready
+                return None                    # DEM not ready
             verts.append(QVector3D(x, y, e - ground_ref))
             lat, lon, _ = datum.local_to_geodetic(QVector3D(x, y, 0.0))
             xf, yf = deg2num(lat, lon, zoom)
             uvs.append(((xf - tx0) / ntx, (yf - ty0) / nty))
 
     tris = []
-    for j in range(n - 1):
-        for i in range(n - 1):
-            a = j * n + i
+    for j in range(ny - 1):
+        for i in range(nx - 1):
+            a = j * nx + i
             b = a + 1
-            c = a + n
+            c = a + nx
             d = c + 1
             tris.append((a, c, b))
             tris.append((b, c, d))
     return TerrainObject(verts, uvs, tris, (tx0, ty0, ntx, nty, zoom),
-                         grid_n=n, radius=radius_m)
+                         nx=nx, ny=ny, bbox=bbox)
 
 
 def build_mosaic(terrain: TerrainObject, images: dict) -> QImage | None:

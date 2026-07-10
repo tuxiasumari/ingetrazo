@@ -729,6 +729,18 @@ class MainWindow(QMainWindow):
             self.viewport.upload_terrain(None)
             self.viewport.update()
 
+    @staticmethod
+    def _capture_bbox(layer):
+        """Local-metre bounding box ``(minx, miny, maxx, maxy)`` of the capture
+        patches — the area the 3D terrain should cover."""
+        patches = getattr(layer, "patches", None) or [(0, 0, layer.radius_m,
+                                                        layer.radius_m)]
+        minx = min(cx - hw for cx, cy, hw, hh in patches)
+        maxx = max(cx + hw for cx, cy, hw, hh in patches)
+        miny = min(cy - hh for cx, cy, hw, hh in patches)
+        maxy = max(cy + hh for cx, cy, hw, hh in patches)
+        return minx, miny, maxx, maxy
+
     def _build_terrain(self) -> None:
         """(Re)build the 3D terrain from the DEM + base-map tiles (async-ready)."""
         if not getattr(self, "_terrain_on", False):
@@ -741,18 +753,20 @@ class MainWindow(QMainWindow):
         if datum is None or layer is None:
             return
         sampler = self._surface_dem(datum)
-        radius, zoom = layer.radius_m, layer.zoom
-        # Ensure the DEM covering the area, and the imagery tiles for the mosaic.
-        lo = self._local_to_ll(datum, -radius, -radius)
-        hi = self._local_to_ll(datum, radius, radius)
+        zoom = layer.zoom
+        # The terrain covers the captured area (the drawn patches' bounding box),
+        # not a fixed square — so the 3D matches what you captured.
+        bbox = self._capture_bbox(layer)
+        minx, miny, maxx, maxy = bbox
+        lo = self._local_to_ll(datum, minx, miny)
+        hi = self._local_to_ll(datum, maxx, maxy)
         sampler.ensure_area(min(lo[0], hi[0]), min(lo[1], hi[1]),
                             max(lo[0], hi[0]), max(lo[1], hi[1]))
-        self.viewport.prefetch_tiles(layer.source, layer.visible_tiles(datum), zoom)
+        self.viewport.prefetch_tiles(layer.source, layer.flat_tiles(datum), zoom)
         ground = ground_reference(sampler, datum)
         if ground is None:
             return                         # DEM not ready — retry on changed
-        terrain = build_terrain(datum, sampler, ground, radius_m=radius,
-                                grid_n=96, zoom=zoom)
+        terrain = build_terrain(datum, sampler, ground, bbox, zoom=zoom)
         if terrain is None:
             return                         # DEM grid not fully loaded yet
         first = scene.terrain is None
