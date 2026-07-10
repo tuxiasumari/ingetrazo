@@ -191,6 +191,34 @@ def test_line_crossing_circle_splits_into_contours():
     assert sum(per) >= 24                             # splits may add pieces
 
 
+def test_deleting_big_rectangle_leaves_clean_faces():
+    # Erasing the outer rectangle used to punch a bogus hole into the sector
+    # face (the heal's partial-overlap test used the polygon centroid, which
+    # for the concave square-minus-sector face falls inside the sector) —
+    # producing a giant garbled face on screen. Faces must stay hole-free.
+    from core.history import EraseSelectionCommand
+    scene = Scene()
+    hist = History(scene)
+    _draw_user_scenario(scene, hist)
+
+    def on_rect_boundary(e):
+        for p in (e.a, e.b):
+            if not (abs(p.x()) < 1e-6 or abs(p.x() - 12) < 1e-6
+                    or abs(p.y()) < 1e-6 or abs(p.y() - 8) < 1e-6):
+                return False
+        return True
+
+    big = [e for e in scene.mesh.edges
+           if e.curve is None and on_rect_boundary(e)]
+    hist.execute(EraseSelectionCommand(big, []))
+    assert len(scene.mesh.faces) == 2
+    for f in scene.mesh.faces:
+        assert not f.hole_loops                     # no spurious holes
+        assert f.triangulate()                      # triangulates cleanly
+    areas = sorted(round(f.area(), 1) for f in scene.mesh.faces)
+    assert areas == [10.1, 30.2]                    # sector + rest of disc
+
+
 def test_plain_edge_has_no_curve():
     scene = Scene()
     e = scene.mesh.add_edge(QVector3D(0, 0, 0), QVector3D(1, 0, 0))

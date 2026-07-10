@@ -1268,7 +1268,15 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
         for face in mesh.faces:
             if face in removed:
                 continue
-            centre = face.centroid()
+            # Guaranteed-interior probes: triangle centroids. A concave face's
+            # polygon centroid can fall OUTSIDE itself (an L around a circular
+            # sector lands inside the sector) and used to punch a bogus hole in
+            # a neighbour it merely borders — require the face's *body* (most of
+            # its triangles) to lie inside the bigger face instead.
+            tris = face.triangulate()
+            if not tris:
+                continue
+            probes = [(t0 + t1 + t2) / 3.0 for t0, t1, t2 in tris]
             fn = face.normal()
             for g in mesh.faces:
                 if g is face or g in removed or g.area() <= face.area():
@@ -1277,7 +1285,8 @@ def heal_overlapping_faces(mesh, coverage: float = 0.5, partial=None) -> list:
                     continue
                 if _g_inside_a_hole(g, face.vertices):
                     continue  # already filling a hole — no overlap
-                if _point_in_face_solid(g, centre):
+                inside = sum(1 for p in probes if _point_in_face_solid(g, p))
+                if inside * 2 > len(probes):
                     punch[g].append(face)
                     break
         for g, smalls in punch.items():

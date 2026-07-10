@@ -602,11 +602,12 @@ class Viewport(QOpenGLWidget):
 
         # Hovered edge — light blue, on top of everything else so it reads as
         # the pick candidate even when it overlaps a selected (orange) edge.
+        # A curve segment highlights its whole contour (what a click selects).
         if isinstance(self._hover_entity, Edge):
-            self._upload_hover_edge(self._hover_entity)
+            hover_count = self._upload_hover_edge(self._hover_entity)
             self._set_color(0.30, 0.55, 0.95, 1.0)
             self._hover_edges_vao.bind()
-            self._gl.glDrawArrays(GL_LINES, 0, 2)
+            self._gl.glDrawArrays(GL_LINES, 0, hover_count)
             self._hover_edges_vao.release()
 
         # Rubber band preview. Loose drawing tools float it on top (depth test
@@ -741,8 +742,11 @@ class Viewport(QOpenGLWidget):
         if normal.length() < 1e-9:
             shade = 0.90
         else:
-            d = QVector3D.dotProduct(normal.normalized(), self._LIGHT)  # -1..1
-            shade = 0.80 + 0.20 * d                                     # 0.60..1.0
+            # abs(): shading depends on the face's plane, not its winding — a
+            # flat plan whose faces happen to wind downward still reads bright,
+            # while a solid keeps its top-bright / sides-toned maquette look.
+            d = abs(QVector3D.dotProduct(normal.normalized(), self._LIGHT))
+            shade = 0.80 + 0.20 * d                                     # 0.80..1.0
         return (min(1.0, base[0] * shade),
                 min(1.0, base[1] * shade),
                 min(1.0, base[2] * shade))
@@ -1218,16 +1222,23 @@ class Viewport(QOpenGLWidget):
         self._silhouette_vbo.release()
         return len(data) // 3
 
-    def _upload_hover_edge(self, edge: Edge) -> None:
-        """Upload the single hovered edge into the hover-edges VBO."""
-        data = array("f", [
-            edge.a.x(), edge.a.y(), edge.a.z(),
-            edge.b.x(), edge.b.y(), edge.b.z(),
-        ])
+    def _upload_hover_edge(self, edge: Edge) -> int:
+        """Upload the hovered edge — or, for a curve segment, its whole contour
+        (what a click would select) — into the hover-edges VBO. Returns the
+        vertex count to draw."""
+        edges = (self.scene.mesh.curve_edges(edge)
+                 if getattr(edge, "curve", None) is not None else [edge])
+        if edge not in edges:      # e.g. a group's edge — not in the main mesh
+            edges = [edge]
+        data = array("f")
+        for e in edges:
+            data.extend([e.a.x(), e.a.y(), e.a.z(),
+                         e.b.x(), e.b.y(), e.b.z()])
         self._hover_edges_vbo.bind()
         raw = data.tobytes()
         self._hover_edges_vbo.allocate(raw, len(raw))
         self._hover_edges_vbo.release()
+        return len(data) // 3
 
     def set_hover(self, entity) -> None:
         """Set the entity (edge/face) highlighted under the cursor and repaint
