@@ -196,6 +196,24 @@ def test_strip_covers_far_fewer_tiles_than_square():
     assert len(strip) < 60                     # bounded — a road stays cheap
 
 
+def test_cap_detail_bounds_a_huge_capture():
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=17)
+    layer.set_rectangle(width_m=30000, length_m=30000)   # 30×30 km at z17 = huge
+    assert len(layer.flat_tiles(datum)) > 500
+    reduced = layer.cap_detail(datum, max_tiles=500)
+    assert reduced and layer.zoom < 17
+    assert len(layer.flat_tiles(datum)) <= 500
+
+
+def test_cap_detail_leaves_small_capture_alone():
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=16)
+    layer.set_rectangle(width_m=800, length_m=6000)      # a modest strip fits
+    assert layer.cap_detail(datum, max_tiles=500) is False
+    assert layer.zoom == 16
+
+
 def test_multiple_patches_union_and_dedup():
     datum = SceneDatum(-12.0464, -77.0428)
     layer = TileLayer(PRESETS["esri_imagery"], zoom=15)

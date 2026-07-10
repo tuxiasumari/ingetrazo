@@ -166,46 +166,33 @@ class BaseMapPanel(QWidget):
         self._zoom.valueChanged.connect(self._on_zoom_changed)
         grid.addWidget(self._zoom, 4, 1)
 
-        # Capture area: a rectangle (width × length in metres). A square for a
-        # site; a long strip for a road — coverage stays bounded (a strip is a
-        # small fraction of the square it fits in).
-        grid.addWidget(QLabel(tr("Capture width (m):")), 5, 0)
-        self._cap_w = QSpinBox()
-        self._cap_w.setRange(200, 100000)
-        self._cap_w.setSingleStep(500)
-        self._cap_w.setValue(2400)
-        self._cap_w.valueChanged.connect(self._on_capture_changed)
-        grid.addWidget(self._cap_w, 5, 1)
-
-        grid.addWidget(QLabel(tr("Capture length (m):")), 6, 0)
-        self._cap_l = QSpinBox()
-        self._cap_l.setRange(200, 100000)
-        self._cap_l.setSingleStep(500)
-        self._cap_l.setValue(2400)
-        self._cap_l.valueChanged.connect(self._on_capture_changed)
-        grid.addWidget(self._cap_l, 6, 1)
+        # Capture area (metres): set by drawing a rectangle in the locator
+        # dialog. A square for a site, a long strip for a road. Kept as state,
+        # not tray fields (the locator is where you define it).
+        self._capture_w = 2400.0
+        self._capture_l = 2400.0
 
         self._find = QPushButton(tr("Search location…"))
         self._find.clicked.connect(self._open_locator)
-        grid.addWidget(self._find, 7, 0, 1, 2)
+        grid.addWidget(self._find, 5, 0, 1, 2)
 
         self._go = QPushButton(tr("Go to location"))
         self._go.clicked.connect(self._go_to)
-        grid.addWidget(self._go, 8, 0, 1, 2)
+        grid.addWidget(self._go, 6, 0, 1, 2)
 
         self._show = QCheckBox(tr("Show base map"))
         self._show.setChecked(True)
         self._show.toggled.connect(self._on_toggle_visible)
-        grid.addWidget(self._show, 9, 0, 1, 2)
+        grid.addWidget(self._show, 7, 0, 1, 2)
 
         self._terrain3d = QCheckBox(tr("3D terrain"))
         self._terrain3d.toggled.connect(self._on_toggle_terrain)
-        grid.addWidget(self._terrain3d, 10, 0, 1, 2)
+        grid.addWidget(self._terrain3d, 8, 0, 1, 2)
 
         self._attribution = QLabel("")
         self._attribution.setWordWrap(True)
         self._attribution.setStyleSheet("color:#9aa3b2; font-size:10px; margin-top:4px;")
-        grid.addWidget(self._attribution, 11, 0, 1, 2)
+        grid.addWidget(self._attribution, 9, 0, 1, 2)
 
         self._sync_from_scene()
 
@@ -250,8 +237,8 @@ class BaseMapPanel(QWidget):
             self._lat.setValue(lat)
             self._lon.setValue(lon)
             if width_m and length_m:      # a capture rectangle was drawn
-                self._cap_w.setValue(int(round(width_m)))
-                self._cap_l.setValue(int(round(length_m)))
+                self._capture_w = width_m
+                self._capture_l = length_m
             self._go_to()
 
     def _go_to(self) -> None:
@@ -259,20 +246,20 @@ class BaseMapPanel(QWidget):
         if src is None:
             return
         scene = self._window.viewport.scene
-        scene.georef = SceneDatum(self._lat.value(), self._lon.value())
-        scene.tile_layer = TileLayer(src, zoom=self._zoom.value())
-        scene.tile_layer.set_rectangle(self._cap_w.value(), self._cap_l.value())
-        scene.tile_layer.visible = self._show.isChecked()
+        datum = SceneDatum(self._lat.value(), self._lon.value())
+        scene.georef = datum
+        layer = TileLayer(src, zoom=self._zoom.value())
+        layer.set_rectangle(self._capture_w, self._capture_l)
+        # Guard: a very large capture is capped in detail so it stays bounded.
+        if layer.cap_detail(datum, max_tiles=500):
+            self._window.viewport.flash_status(tr(
+                "Large capture — detail reduced to zoom {z} to stay fast.")
+                .format(z=layer.zoom))
+        layer.visible = self._show.isChecked()
+        scene.tile_layer = layer
         self._attribution.setText(src.attribution)
         self._window.viewport.reset_tiles()
-        self._frame_camera(max(self._cap_w.value(), self._cap_l.value()) / 2.0)
-
-    def _on_capture_changed(self) -> None:
-        """Resize the capture rectangle on an existing base map (live)."""
-        layer = getattr(self._window.viewport.scene, "tile_layer", None)
-        if layer is not None:
-            layer.set_rectangle(self._cap_w.value(), self._cap_l.value())
-            self._window.viewport.reset_tiles()
+        self._frame_camera(max(self._capture_w, self._capture_l) / 2.0)
 
     def _frame_camera(self, radius: float) -> None:
         from PySide6.QtGui import QVector3D

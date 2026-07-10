@@ -39,6 +39,7 @@ class MapPicker(QWidget):
     """A pannable/zoomable slippy map; its centre is the selected point."""
 
     centerChanged = Signal(float, float)   # lat, lon
+    rectChanged = Signal()                 # a capture rectangle was drawn
 
     def __init__(self, source, parent=None) -> None:
         super().__init__(parent)
@@ -208,6 +209,7 @@ class MapPicker(QWidget):
                 la1, lo1 = self._screen_to_ll(p0.x(), p0.y())
                 la2, lo2 = self._screen_to_ll(p1.x(), p1.y())
                 self._rect_ll = (la1, lo1, la2, lo2)
+                self.rectChanged.emit()
             self._rect_screen = None
             self.update()
             return
@@ -260,6 +262,7 @@ class LocationDialog(QDialog):
 
         self._map = MapPicker(source)
         self._map.centerChanged.connect(self._on_center)
+        self._map.rectChanged.connect(self._on_rect)
         root.addWidget(self._map, 1)
 
         self._draw_rect = QCheckBox(
@@ -324,6 +327,17 @@ class LocationDialog(QDialog):
         self._status.setText(tr("Near {label} (approximate — refine on the map).")
                              .format(label=label))
         self._map.set_center(lat, lon, zoom=11)
+
+    def _on_rect(self) -> None:
+        rect = self._map.capture_rect()
+        if rect is None:
+            return
+        _, _, wm, lm = rect
+        km2 = (wm / 1000.0) * (lm / 1000.0)
+        msg = tr("Capture area: {w} × {l} m").format(w=f"{wm:.0f}", l=f"{lm:.0f}")
+        if km2 > 25.0:      # bigger than ~5×5 km → detail will be reduced
+            msg += "  " + tr("(large — detail will be reduced to stay fast)")
+        self._status.setText(msg)
 
     def _on_center(self, lat, lon) -> None:
         for box, val in ((self._lat_box, lat), (self._lon_box, lon)):

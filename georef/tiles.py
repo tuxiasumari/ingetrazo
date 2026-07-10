@@ -203,6 +203,17 @@ class TileLayer:
             seen.update(self._patch_tiles(datum, cx, cy, hw, hh))
         return sorted(seen)
 
+    def cap_detail(self, datum, max_tiles: int = 500,
+                   min_zoom: int = 8) -> bool:
+        """Lower ``zoom`` until the capture fits ``max_tiles`` — so a very large
+        drawn area stays bounded (a big area gets coarser, not slower). Returns
+        ``True`` if the zoom was reduced."""
+        reduced = False
+        while len(self.flat_tiles(datum)) > max_tiles and self.zoom > min_zoom:
+            self.zoom -= 1
+            reduced = True
+        return reduced
+
     def visible_tiles(self, datum) -> list[tuple[int, int]]:
         """Tiles covering a ``±radius_m`` square around the datum (used by the
         3D terrain, which stays a local square)."""
