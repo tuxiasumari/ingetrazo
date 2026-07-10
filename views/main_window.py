@@ -643,6 +643,12 @@ class MainWindow(QMainWindow):
         self.profile_dock.raise_()
         self.profile_dock.compute_from_selection()
 
+    def on_viewport_hover(self, screen_x: float, screen_y: float) -> None:
+        """Plan→profile link: mark the station of the route point under the
+        cursor in the open profile (Track G)."""
+        if self.profile_dock.isVisible():
+            self.profile_dock.indicate_at_screen(screen_x, screen_y)
+
     # ---- Undo / redo --------------------------------------------------------
     def _on_undo(self) -> None:
         if self.viewport.history.undo():

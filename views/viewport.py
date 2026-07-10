@@ -345,6 +345,8 @@ class Viewport(QOpenGLWidget):
         # Georef path node being hovered ``(path, index)`` — for the drag handle
         # highlight (Track G, GeoPath node editing).
         self._hover_geo_node = None
+        # World point on the profiled route to mark (profile→plan link), or None.
+        self._route_marker = None
 
     # ---- GL lifecycle -------------------------------------------------------
     def initializeGL(self) -> None:
@@ -1175,6 +1177,16 @@ class Viewport(QOpenGLWidget):
 
         # Traced georef paths (roads / boundaries) — Track G.
         self._draw_geo_paths(painter)
+
+        # Profile→plan marker: the route point at the station hovered in the
+        # profile panel (Track G).
+        if self._route_marker is not None:
+            q = self._world_to_pixel(self._route_marker)
+            if q is not None:
+                painter.setBrush(QColor(243, 115, 41))
+                painter.setPen(QPen(QColor(255, 255, 255), 1.5))
+                painter.drawEllipse(QPointF(*q), 6, 6)
+                painter.setBrush(Qt.NoBrush)
 
         # Persistent dimension annotations
         self._draw_dimensions(painter)
@@ -2041,6 +2053,11 @@ class Viewport(QOpenGLWidget):
 
         # Track cursor + hover edge so Down can capture a reference edge.
         self._last_mouse_pos = ev.position()
+        # Plan↔profile link (Track G): let an open profile mark the station of
+        # the route point under the cursor.
+        win = self.window()
+        if hasattr(win, "on_viewport_hover"):
+            win.on_viewport_hover(ev.position().x(), ev.position().y())
         self._hover_edge = self.pick_edge(ev.position().x(), ev.position().y())
 
         # While a segment is being drawn, hovering an edge acquires it as a soft

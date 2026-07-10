@@ -25,10 +25,26 @@ from PySide6.QtWidgets import (
 
 from core.i18n import tr
 from georef.profile import (
+    point_at_station,
     profile_to_csv,
     sample_profile,
     selected_geopath,
 )
+
+
+def _point_seg_2d(p, a, b):
+    """Distance from point ``p`` to segment ``a-b`` and the clamped foot
+    parameter ``t`` in ``[0, 1]``, in 2D."""
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    d2 = dx * dx + dy * dy
+    if d2 < 1e-9:
+        return math.hypot(p[0] - ax, p[1] - ay), 0.0
+    t = ((p[0] - ax) * dx + (p[1] - ay) * dy) / d2
+    t = max(0.0, min(1.0, t))
+    fx, fy = ax + t * dx, ay + t * dy
+    return math.hypot(p[0] - fx, p[1] - fy), t
 
 
 def _nice_ticks(lo: float, hi: float, target: int = 5) -> list[float]:
@@ -66,6 +82,7 @@ class ProfileView(QWidget):
         self._message = tr("Select a polyline and click “Profile”.")
         self._plot = None             # last plot geometry, for cursor mapping
         self._cursor_station = None   # station (m) under the mouse, or None
+        self.on_station_hover = None  # callback(station|None) — profile→plan link
 
     def set_profile(self, profile) -> None:
         self._profile = profile
@@ -84,13 +101,21 @@ class ProfileView(QWidget):
         left, right, length = self._plot["left"], self._plot["right"], self._plot["length"]
         x = ev.position().x()
         if left <= x <= right and right > left:
-            self._cursor_station = (x - left) / (right - left) * length
+            self._set_cursor_station((x - left) / (right - left) * length)
         else:
-            self._cursor_station = None
-        self.update()
+            self._set_cursor_station(None)
 
     def leaveEvent(self, _ev) -> None:
-        self._cursor_station = None
+        self._set_cursor_station(None)
+
+    def show_station(self, station) -> None:
+        """Externally drive the cursor to ``station`` (plan→profile link)."""
+        self._set_cursor_station(station, notify=False)
+
+    def _set_cursor_station(self, station, notify: bool = True) -> None:
+        self._cursor_station = station
+        if notify and self.on_station_hover is not None:
+            self.on_station_hover(station)   # profile→plan marker
         self.update()
 
     def _elevation_at_station(self, s: float):
@@ -260,6 +285,9 @@ class ProfileDock(QDockWidget):
         col.addWidget(self.view, 1)
         self.setWidget(inner)
 
+        # Profile→plan: mark the route point when the profile is hovered.
+        self.view.on_station_hover = self._on_profile_station_hover
+
     # ---- Compute ------------------------------------------------------------
     def _ensure_sampler(self, datum):
         """(Re)build the DEM sampler when the datum changes."""
@@ -306,6 +334,42 @@ class ProfileDock(QDockWidget):
         scene = self._window.viewport.scene
         if self._geopath in scene.geo_paths and self._sampler is not None:
             self._recompute()
+
+    # ---- Plan ↔ profile linking (Track G) -----------------------------------
+    def indicate_at_screen(self, screen_x: float, screen_y: float) -> None:
+        """Plan→profile: given the cursor over the viewport, mark the station of
+        the nearest point on the profiled route in the profile plot."""
+        if self._geopath is None:
+            return
+        self.view.show_station(self._station_at_screen(screen_x, screen_y))
+
+    def _station_at_screen(self, screen_x: float, screen_y: float):
+        """Chainage of the route point nearest the cursor (screen space), or
+        ``None`` if the cursor isn't near the route."""
+        vp = self._window.viewport
+        pts = self._geopath.profile_points()
+        best_d, best_station = 24.0, None      # only engage within 24 px
+        acc = 0.0
+        for a, b in zip(pts, pts[1:]):
+            seg_len = math.hypot(b.x() - a.x(), b.y() - a.y())
+            pa, pb = vp._world_to_pixel(a), vp._world_to_pixel(b)
+            if pa is not None and pb is not None:
+                d, t = _point_seg_2d((screen_x, screen_y), pa, pb)
+                if d < best_d:
+                    best_d, best_station = d, acc + t * seg_len
+            acc += seg_len
+        return best_station
+
+    def _on_profile_station_hover(self, station) -> None:
+        """Profile→plan: place a marker on the route at ``station`` in 3D."""
+        vp = self._window.viewport
+        if station is None or self._geopath is None:
+            vp._route_marker = None
+        else:
+            from PySide6.QtGui import QVector3D
+            x, y = point_at_station(self._geopath.profile_points(), station)
+            vp._route_marker = QVector3D(x, y, 0.0)
+        vp.update()
 
     # ---- Export -------------------------------------------------------------
     def _export_csv(self) -> None:
