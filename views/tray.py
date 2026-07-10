@@ -75,9 +75,13 @@ class _Section(QWidget):
         self._btn.setChecked(True)
         self._btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._btn.setArrowType(Qt.DownArrow)
+        # Clean, light header (QGIS-style): plain bold title on the panel
+        # background with a subtle underline — no dark bar. Uses palette() roles
+        # so it adapts to light and dark themes.
         self._btn.setStyleSheet(
-            "QToolButton { font-weight: bold; padding: 6px; border: none;"
-            " background: #2d3340; color: #e8ebf0; text-align: left; }")
+            "QToolButton { font-weight: bold; padding: 6px 4px; border: none;"
+            " border-bottom: 1px solid palette(mid); text-align: left; }"
+            "QToolButton:hover { background: palette(midlight); }")
         self._btn.toggled.connect(self._on_toggle)
         self._content = content
         lay.addWidget(self._btn)
