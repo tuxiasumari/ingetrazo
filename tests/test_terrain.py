@@ -84,6 +84,16 @@ def test_mosaic_composites_tiles():
     assert mosaic.pixelColor(10, 10).red() == 255
 
 
+def test_height_at_bilinear():
+    # Linear terrain z = 0.1x (ground-relative): height_at must recover it.
+    sampler = StubSampler(DATUM, lambda x, y: 0.1 * x)
+    t = build_terrain(DATUM, sampler, 0.0, radius_m=500, grid_n=21, zoom=15)
+    assert abs(t.height_at(0, 0) - 0.0) < 1e-6
+    assert abs(t.height_at(200, 0) - 20.0) < 0.5
+    assert abs(t.height_at(-300, 100) - (-30.0)) < 0.5
+    assert t.height_at(9999, 0) is None      # outside the patch
+
+
 def test_mosaic_none_when_no_images():
     sampler = StubSampler(DATUM, lambda x, y: 3000.0)
     t = build_terrain(DATUM, sampler, 3000.0, radius_m=300, grid_n=6, zoom=15)

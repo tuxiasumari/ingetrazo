@@ -1269,7 +1269,7 @@ class Viewport(QOpenGLWidget):
         # Profile→plan marker: the route point at the station hovered in the
         # profile panel (Track G).
         if self._route_marker is not None:
-            q = self._world_to_pixel(self._route_marker)
+            q = self._world_to_pixel(self.drape(self._route_marker))
             if q is not None:
                 painter.setBrush(QColor(243, 115, 41))
                 painter.setPen(QPen(QColor(255, 255, 255), 1.5))
@@ -1437,6 +1437,17 @@ class Viewport(QOpenGLWidget):
                 painter.drawPolygon(QPolygonF([QPointF(*p0), QPointF(*p1), QPointF(*p2)]))
             painter.setBrush(Qt.NoBrush)
 
+    def drape(self, v: QVector3D) -> QVector3D:
+        """Lift a Z=0 georef point onto the 3D terrain (its relief height) when
+        the terrain is showing, so routes/markers sit on the ground instead of
+        floating at the Z=0 reference plane. A no-op otherwise."""
+        t = getattr(self.scene, "terrain", None)
+        if t is not None and getattr(t, "visible", False):
+            z = t.height_at(v.x(), v.y())
+            if z is not None:
+                return QVector3D(v.x(), v.y(), z)
+        return v
+
     def _draw_geo_paths(self, painter: QPainter) -> None:
         """Draw committed georef paths (roads / boundaries): a coloured polyline
         with node handles. Selected paths and the hovered node highlight."""
@@ -1449,7 +1460,7 @@ class Viewport(QOpenGLWidget):
         hover_node = getattr(self, "_hover_geo_node", None)
         for path in paths:
             ink = sel_ink if path in selection else base_ink
-            pix = [self._world_to_pixel(p) for p in path.points]
+            pix = [self._world_to_pixel(self.drape(p)) for p in path.points]
             painter.setPen(QPen(ink, 2.5))
             for a, b in zip(pix, pix[1:]):
                 if a is not None and b is not None:
@@ -1474,7 +1485,7 @@ class Viewport(QOpenGLWidget):
         cx = sum(p.x() for p in path.points) / n
         cy = sum(p.y() for p in path.points) / n
         cz = sum(p.z() for p in path.points) / n
-        q = self._world_to_pixel(QVector3D(cx, cy, cz))
+        q = self._world_to_pixel(self.drape(QVector3D(cx, cy, cz)))
         if q is None:
             return
         area = path.area()
@@ -1886,8 +1897,8 @@ class Viewport(QOpenGLWidget):
         best, best_d = None, self.pick_threshold_px
         for path in paths:
             for a, b in path.segments():
-                pa = self._world_to_pixel(a)
-                pb = self._world_to_pixel(b)
+                pa = self._world_to_pixel(self.drape(a))
+                pb = self._world_to_pixel(self.drape(b))
                 if pa is None or pb is None:
                     continue
                 d = _point_to_segment_distance_2d((screen_x, screen_y), pa, pb)

@@ -26,13 +26,36 @@ TILE_PX = 256
 class TerrainObject:
     """A draped-terrain patch: grid vertices, UVs, triangles, and its texture."""
 
-    def __init__(self, vertices, uvs, triangles, tile_range) -> None:
+    def __init__(self, vertices, uvs, triangles, tile_range,
+                 grid_n=0, radius=0.0) -> None:
         self.vertices = vertices          # list[QVector3D] local metres
         self.uvs = uvs                    # list[(u, v)] into the mosaic
         self.triangles = triangles        # list[(i, j, k)] indices
         self.tile_range = tile_range      # (tx0, ty0, ntx, nty, zoom)
+        self.grid_n = grid_n              # grid is grid_n × grid_n
+        self.radius = radius              # spans ±radius in x and y
         self.visible = True
         self.texture_image = None         # QImage mosaic (set by build_mosaic)
+
+    def height_at(self, x: float, y: float) -> float | None:
+        """Bilinearly interpolated terrain Z at local ``(x, y)``, or ``None`` if
+        outside the patch. Used to drape routes/markers onto the relief."""
+        n, r = self.grid_n, self.radius
+        if n < 2 or r <= 0 or not (-r <= x <= r and -r <= y <= r):
+            return None
+        fi = (x + r) / (2 * r) * (n - 1)       # column (x: -r..r → 0..n-1)
+        fj = (r - y) / (2 * r) * (n - 1)       # row 0 is north (+y)
+        i0 = max(0, min(n - 2, int(fi)))
+        j0 = max(0, min(n - 2, int(fj)))
+        tx, ty = fi - i0, fj - j0
+        z = self.vertices
+        z00 = z[j0 * n + i0].z()
+        z10 = z[j0 * n + i0 + 1].z()
+        z01 = z[(j0 + 1) * n + i0].z()
+        z11 = z[(j0 + 1) * n + i0 + 1].z()
+        top = z00 * (1 - tx) + z10 * tx
+        bot = z01 * (1 - tx) + z11 * tx
+        return top * (1 - ty) + bot * ty
 
     def bounds(self):
         if not self.vertices:
@@ -95,7 +118,8 @@ def build_terrain(datum, sampler, ground_ref: float, radius_m: float = 1200.0,
             d = c + 1
             tris.append((a, c, b))
             tris.append((b, c, d))
-    return TerrainObject(verts, uvs, tris, (tx0, ty0, ntx, nty, zoom))
+    return TerrainObject(verts, uvs, tris, (tx0, ty0, ntx, nty, zoom),
+                         grid_n=n, radius=radius_m)
 
 
 def build_mosaic(terrain: TerrainObject, images: dict) -> QImage | None:

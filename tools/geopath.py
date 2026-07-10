@@ -146,7 +146,7 @@ class GeoPathTool(Tool):
         best, best_d = None, _NODE_PX
         for path in vp.scene.geo_paths:
             for i, p in enumerate(path.points):
-                q = vp._world_to_pixel(p)
+                q = vp._world_to_pixel(vp.drape(p))
                 if q is None:
                     continue
                 d = math.hypot(q[0] - ctx.screen.x(), q[1] - ctx.screen.y())

@@ -352,7 +352,7 @@ class ProfileDock(QDockWidget):
         acc = 0.0
         for a, b in zip(pts, pts[1:]):
             seg_len = math.hypot(b.x() - a.x(), b.y() - a.y())
-            pa, pb = vp._world_to_pixel(a), vp._world_to_pixel(b)
+            pa, pb = vp._world_to_pixel(vp.drape(a)), vp._world_to_pixel(vp.drape(b))
             if pa is not None and pb is not None:
                 d, t = _point_seg_2d((screen_x, screen_y), pa, pb)
                 if d < best_d:
