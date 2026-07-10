@@ -94,6 +94,24 @@ def test_two_circles_get_distinct_ids():
     assert len(ids) == 2              # two circles → two distinct curve ids
 
 
+def test_tag_curve_robust_to_split_segments():
+    # A loop segment split into two pieces: both must be tagged (this is what
+    # was breaking selection when a circle crossed existing geometry).
+    from core.mesh import Mesh
+    m = Mesh()
+    loop = [QVector3D(0, 0, 0), QVector3D(10, 0, 0),
+            QVector3D(10, 10, 0), QVector3D(0, 10, 0)]
+    m.add_edge(QVector3D(0, 0, 0), QVector3D(5, 0, 0))    # split first segment
+    m.add_edge(QVector3D(5, 0, 0), QVector3D(10, 0, 0))
+    m.add_edge(QVector3D(10, 0, 0), QVector3D(10, 10, 0))
+    m.add_edge(QVector3D(10, 10, 0), QVector3D(0, 10, 0))
+    m.add_edge(QVector3D(0, 10, 0), QVector3D(0, 0, 0))
+    cid = m.tag_curve(loop, closed=True)
+    assert cid is not None
+    assert all(e.curve == cid for e in m.edges)          # every piece tagged
+    assert len(m.curve_edges(m.edges[0])) == 5
+
+
 def test_plain_edge_has_no_curve():
     scene = Scene()
     e = scene.mesh.add_edge(QVector3D(0, 0, 0), QVector3D(1, 0, 0))

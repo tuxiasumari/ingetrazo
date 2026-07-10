@@ -274,11 +274,12 @@ class Mesh:
         return None
 
     def tag_curve(self, loop_points, closed: bool = True) -> int | None:
-        """Mark the edges connecting consecutive ``loop_points`` as one curve
-        (a fresh id), so selecting any segment selects the whole circle/arc.
-        Called by the circle/arc tools after they commit. Returns the id, or
-        ``None`` if no edges matched (e.g. the loop was split by other geometry).
-        """
+        """Mark every edge lying along the drawn ``loop_points`` path as one
+        curve (a fresh id), so selecting any segment selects the whole circle/arc.
+        Robust to splits: an edge is tagged when both its endpoints fall on one
+        of the loop's segments, so a segment split by crossing geometry still has
+        all its pieces tagged. Returns the id, or ``None`` if nothing matched."""
+        from core.topology import _point_on_seg_incl
         global _CURVE_COUNTER
         pts = list(loop_points)
         if len(pts) < 2:
@@ -288,14 +289,15 @@ class Mesh:
         if closed:
             pairs.append((pts[-1], pts[0]))
         tagged = False
-        for a, b in pairs:
-            va, vb = self.vertex_at(a), self.vertex_at(b)
-            if va is None or vb is None:
+        for e in self.edges:
+            if e.curve is not None:
                 continue
-            e = self.find_edge(va, vb)
-            if e is not None:
-                e.curve = cid
-                tagged = True
+            a, b = e.a, e.b
+            for pa, pb in pairs:
+                if _point_on_seg_incl(a, pa, pb) and _point_on_seg_incl(b, pa, pb):
+                    e.curve = cid
+                    tagged = True
+                    break
         if tagged:
             _CURVE_COUNTER += 1
             return cid
