@@ -127,8 +127,13 @@ class MainWindow(QMainWindow):
         self.viewport.tilesChanged.connect(self._build_terrain)
 
     def _build_toolbar(self) -> None:
-        toolbar = QToolBar(tr("Main"), self)
-        toolbar.setMovable(False)
+        toolbar = QToolBar(tr("Tools"), self)
+        # Draggable + dockable to any edge or floating in its own window
+        # (SketchUp-style). Left/right docking stacks the buttons vertically.
+        toolbar.setMovable(True)
+        toolbar.setFloatable(True)
+        toolbar.setAllowedAreas(Qt.AllToolBarAreas)
+        self.toolbar = toolbar
         self.addToolBar(Qt.TopToolBarArea, toolbar)
 
         self._tool_group = QActionGroup(self)
