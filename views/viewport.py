@@ -1022,16 +1022,23 @@ class Viewport(QOpenGLWidget):
         if self.scene.version == self._edges_version:
             return
 
-        # The scene changed under the cursor: drop a hover entity that no longer
-        # exists, or a just-deleted edge/face keeps ghost-rendering (blue) until
-        # the mouse moves — e.g. Delete pressed while hovering the target.
+        # The scene changed: purge hover/selection references to entities that
+        # no longer exist, or deleted geometry keeps ghost-rendering (blue
+        # hover / orange selection) until the mouse moves or a click replaces
+        # the selection. Renderer-level guarantee — holds no matter which
+        # command forgot to discard.
+        alive_edges = set(self.scene.render_edges())
+        alive_faces = set(self.scene.render_faces())
         hover = self._hover_entity
-        if isinstance(hover, Edge):
-            if not any(hover is e for e in self.scene.render_edges()):
-                self._hover_entity = None
-        elif isinstance(hover, Face):
-            if not any(hover is f for f in self.scene.render_faces()):
-                self._hover_entity = None
+        if isinstance(hover, Edge) and hover not in alive_edges:
+            self._hover_entity = None
+        elif isinstance(hover, Face) and hover not in alive_faces:
+            self._hover_entity = None
+        dead = [s for s in self.scene.selection
+                if (isinstance(s, Edge) and s not in alive_edges)
+                or (isinstance(s, Face) and s not in alive_faces)]
+        for s in dead:
+            self.scene.selection.discard(s)
 
         all_data = array("f")
         for e in self.scene.render_edges():
