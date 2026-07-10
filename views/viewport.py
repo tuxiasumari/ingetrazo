@@ -46,6 +46,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QImage,
+    QMatrix4x4,
     QOpenGLFunctions,
     QPainter,
     QPen,
@@ -389,6 +390,7 @@ class Viewport(QOpenGLWidget):
         )
         self._axes_vao, self._axes_vbo, _ = self._upload_static(_axes_vertices())
 
+        self._sky_vao, self._sky_vbo = self._create_dynamic()
         self._edges_vao, self._edges_vbo = self._create_dynamic()
         self._selected_vao, self._selected_vbo = self._create_dynamic()
         self._sel_faces_vao, self._sel_faces_vbo = self._create_dynamic()
@@ -452,7 +454,7 @@ class Viewport(QOpenGLWidget):
         self._gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
         self._gl.glClearDepthf(1.0)
-        self._gl.glClearColor(0.93, 0.94, 0.96, 1.0)
+        self._gl.glClearColor(0.90, 0.91, 0.92, 1.0)
         self._gl.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         mvp = self.camera.projection_matrix() * self.camera.view_matrix()
@@ -461,6 +463,14 @@ class Viewport(QOpenGLWidget):
         # Solid-colour by default; the textured-face pass flips this on.
         self._program.setUniformValue(self._loc_use_tex, 0)
         self._program.setUniformValue(self._loc_tex, 0)  # sampler → unit 0
+
+        # Sky / ground backdrop with a horizon anchored to the camera pitch —
+        # premium SketchUp feel. Fixed on zoom (it's the point at infinity),
+        # moves only on orbit. Skipped over the base map / terrain (which supply
+        # their own ground).
+        if not self._base_map_showing() and not self._terrain_showing():
+            self._draw_sky(mvp)
+            self._program.setUniformValue(self._loc_mvp, mvp)
 
         # Base-map tiles (Track G) — the ground image, drawn before the grid so
         # the grid lines read on top of the imagery. Depth-write OFF: it's a
@@ -885,6 +895,55 @@ class Viewport(QOpenGLWidget):
         self._tile_quad_vbo.release()
         self._tile_geom = (key, runs)
         return runs
+
+    # Sky (top) and ground (bottom) backdrop colours — subtle two-tone, SketchUp.
+    _SKY_RGB = (0.925, 0.935, 0.945)
+    _GROUND_RGB = (0.815, 0.820, 0.815)
+
+    def _horizon_ndc_y(self, mvp) -> float:
+        """Screen-space NDC y of the horizon (the ground plane at infinity),
+        from the camera orientation. Returns a value that may exceed ±1 when the
+        horizon is off-screen (looking straight down = all ground)."""
+        eye = self.camera.eye()
+        fwd = self.camera.target - eye
+        # Horizontal component of the view direction → its vanishing point.
+        dh = QVector3D(fwd.x(), fwd.y(), 0.0)
+        if dh.length() < 1e-5:
+            # Looking straight down/up: no horizon on screen.
+            return 2.0 if fwd.z() < 0 else -2.0
+        dh = dh.normalized()
+        # A point very far along the horizontal heading, at eye height: as the
+        # distance → ∞ it converges to the horizon, so it stays put on zoom.
+        far = eye + dh * 1.0e6
+        clip = mvp.map(QVector4D(far.x(), far.y(), far.z(), 1.0))
+        if abs(clip.w()) < 1e-9:
+            return 2.0 if fwd.z() < 0 else -2.0
+        return clip.y() / clip.w()
+
+    def _draw_sky(self, mvp) -> None:
+        """Fill sky above the horizon and ground below with two flat tones."""
+        hy = max(-1.0, min(1.0, self._horizon_ndc_y(mvp)))
+        self._program.setUniformValue(self._loc_mvp, QMatrix4x4())  # identity/NDC
+        self._gl.glDisable(GL_DEPTH_TEST)
+        self._gl.glDepthMask(GL_FALSE)
+        self._sky_vao.bind()
+
+        def quad(y0, y1, rgb):
+            data = array("f", [-1, y0, 0, 1, y0, 0, 1, y1, 0,
+                               -1, y0, 0, 1, y1, 0, -1, y1, 0])
+            self._sky_vbo.bind()
+            self._sky_vbo.allocate(data.tobytes(), len(data) * 4)
+            self._sky_vbo.release()
+            self._set_color(*rgb, 1.0)
+            self._gl.glDrawArrays(GL_TRIANGLES, 0, 6)
+
+        if hy < 1.0:
+            quad(hy, 1.0, self._SKY_RGB)
+        if hy > -1.0:
+            quad(-1.0, hy, self._GROUND_RGB)
+        self._sky_vao.release()
+        self._gl.glEnable(GL_DEPTH_TEST)
+        self._gl.glDepthMask(GL_TRUE)
 
     def _render_tiles(self) -> None:
         if self._terrain_showing():
