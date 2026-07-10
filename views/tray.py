@@ -246,9 +246,12 @@ class BaseMapPanel(QWidget):
         src = self._current_source() or PRESETS[DEFAULT_SOURCE_ID]
         result = pick_location(src, self._lat.value(), self._lon.value(), self)
         if result is not None:
-            lat, lon = result
+            lat, lon, width_m, length_m = result
             self._lat.setValue(lat)
             self._lon.setValue(lon)
+            if width_m and length_m:      # a capture rectangle was drawn
+                self._cap_w.setValue(int(round(width_m)))
+                self._cap_l.setValue(int(round(length_m)))
             self._go_to()
 
     def _go_to(self) -> None:

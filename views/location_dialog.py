@@ -14,6 +14,7 @@ import math
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -47,6 +48,12 @@ class MapPicker(QWidget):
         self._lat, self._lon = -12.0464, -77.0428
         self._zoom = 5
         self._drag = None
+        # Capture-rectangle drawing: when on, a left-drag draws the area to
+        # capture instead of panning. Committed as geographic corners so it
+        # stays anchored to the ground as you pan/zoom.
+        self._rect_mode = False
+        self._rect_screen = None       # (start_pt, cur_pt) while dragging
+        self._rect_ll = None           # (lat1, lon1, lat2, lon2) committed
         from georef.tile_fetcher import TileFetcher
         self._fetcher = TileFetcher(parent=self)
         self._fetcher.tileReady.connect(lambda *_: self.update())
@@ -70,6 +77,37 @@ class MapPicker(QWidget):
         self._source = source
         self._images.clear()
         self.update()
+
+    def set_rect_mode(self, on: bool) -> None:
+        self._rect_mode = bool(on)
+        self.setCursor(Qt.CrossCursor if on else Qt.OpenHandCursor)
+
+    # ---- Screen ↔ geographic -------------------------------------------------
+    def _screen_to_ll(self, sx, sy):
+        w, h = self.width(), self.height()
+        cxf, cyf = deg2num(self._lat, self._lon, self._zoom)
+        ox = cxf * TILE_PX - w / 2
+        oy = cyf * TILE_PX - h / 2
+        return num2deg((ox + sx) / TILE_PX, (oy + sy) / TILE_PX, self._zoom)
+
+    def _ll_to_screen(self, lat, lon):
+        w, h = self.width(), self.height()
+        cxf, cyf = deg2num(self._lat, self._lon, self._zoom)
+        xf, yf = deg2num(lat, lon, self._zoom)
+        return (xf * TILE_PX - (cxf * TILE_PX - w / 2),
+                yf * TILE_PX - (cyf * TILE_PX - h / 2))
+
+    def capture_rect(self):
+        """The drawn capture area as ``(center_lat, center_lon, width_m,
+        length_m)``, or ``None`` if none was drawn."""
+        if self._rect_ll is None:
+            return None
+        import math
+        la1, lo1, la2, lo2 = self._rect_ll
+        clat, clon = (la1 + la2) / 2, (lo1 + lo2) / 2
+        width_m = abs(lo2 - lo1) * 111320.0 * math.cos(math.radians(clat))
+        length_m = abs(la2 - la1) * 111320.0
+        return clat, clon, max(200.0, width_m), max(200.0, length_m)
 
     # ---- Rendering ----------------------------------------------------------
     def paintEvent(self, _ev) -> None:
@@ -98,6 +136,25 @@ class MapPicker(QWidget):
                     p.fillRect(int(sx), int(sy), TILE_PX, TILE_PX,
                                QColor(214, 217, 222))
 
+        # Capture rectangle: the drawn area to import.
+        rect_pts = None
+        if self._rect_screen is not None:
+            (p0, p1) = self._rect_screen
+            rect_pts = (p0.x(), p0.y(), p1.x(), p1.y())
+        elif self._rect_ll is not None:
+            la1, lo1, la2, lo2 = self._rect_ll
+            x0, y0 = self._ll_to_screen(la1, lo1)
+            x1, y1 = self._ll_to_screen(la2, lo2)
+            rect_pts = (x0, y0, x1, y1)
+        if rect_pts is not None:
+            x0, y0, x1, y1 = rect_pts
+            rx, ry = min(x0, x1), min(y0, y1)
+            rw, rh = abs(x1 - x0), abs(y1 - y0)
+            p.setBrush(QColor(255, 200, 40, 40))
+            p.setPen(QPen(QColor(255, 190, 30), 2))
+            p.drawRect(int(rx), int(ry), int(rw), int(rh))
+            p.setBrush(Qt.NoBrush)
+
         # Centre pin — the selected point.
         cx, cy = w / 2, h / 2
         p.setPen(QPen(QColor(255, 255, 255), 3))
@@ -122,11 +179,19 @@ class MapPicker(QWidget):
 
     # ---- Interaction --------------------------------------------------------
     def mousePressEvent(self, ev) -> None:
-        if ev.button() == Qt.LeftButton:
+        if ev.button() != Qt.LeftButton:
+            return
+        if self._rect_mode:
+            self._rect_screen = (ev.position(), ev.position())
+        else:
             self._drag = ev.position()
             self.setCursor(Qt.ClosedHandCursor)
 
     def mouseMoveEvent(self, ev) -> None:
+        if self._rect_mode and self._rect_screen is not None:
+            self._rect_screen = (self._rect_screen[0], ev.position())
+            self.update()
+            return
         if self._drag is None:
             return
         dx = ev.position().x() - self._drag.x()
@@ -137,8 +202,17 @@ class MapPicker(QWidget):
         self.set_center(lat, lon)
 
     def mouseReleaseEvent(self, _ev) -> None:
+        if self._rect_mode and self._rect_screen is not None:
+            (p0, p1) = self._rect_screen
+            if abs(p1.x() - p0.x()) > 4 and abs(p1.y() - p0.y()) > 4:
+                la1, lo1 = self._screen_to_ll(p0.x(), p0.y())
+                la2, lo2 = self._screen_to_ll(p1.x(), p1.y())
+                self._rect_ll = (la1, lo1, la2, lo2)
+            self._rect_screen = None
+            self.update()
+            return
         self._drag = None
-        self.setCursor(Qt.OpenHandCursor)
+        self.setCursor(Qt.OpenHandCursor if not self._rect_mode else Qt.CrossCursor)
 
     def wheelEvent(self, ev) -> None:
         step = 1 if ev.angleDelta().y() > 0 else -1
@@ -187,6 +261,11 @@ class LocationDialog(QDialog):
         self._map = MapPicker(source)
         self._map.centerChanged.connect(self._on_center)
         root.addWidget(self._map, 1)
+
+        self._draw_rect = QCheckBox(
+            tr("Draw capture area (drag a rectangle on the map)"))
+        self._draw_rect.toggled.connect(self._map.set_rect_mode)
+        root.addWidget(self._draw_rect)
 
         coords = QHBoxLayout()
         coords.addWidget(QLabel(tr("Lat:")))
@@ -256,12 +335,20 @@ class LocationDialog(QDialog):
         self._map.set_center(self._lat_box.value(), self._lon_box.value())
 
     def selected(self):
-        """Return the chosen ``(lat, lon)`` — the map centre."""
-        return self._map.center()
+        """``(lat, lon, width_m, length_m)``. If a capture rectangle was drawn,
+        the location is its centre and the size comes from it; otherwise the map
+        centre with ``None`` sizes (the tray keeps its typed capture size)."""
+        rect = self._map.capture_rect()
+        if rect is not None:
+            clat, clon, wm, lm = rect
+            return clat, clon, wm, lm
+        lat, lon = self._map.center()
+        return lat, lon, None, None
 
 
 def pick_location(source, lat, lon, parent=None):
-    """Modal locator. Returns ``(lat, lon)`` on accept, or ``None`` on cancel."""
+    """Modal locator. Returns ``(lat, lon, width_m, length_m)`` on accept
+    (sizes may be ``None`` if no capture rectangle was drawn), else ``None``."""
     src = source if source is not None else PRESETS["esri_imagery"]
     dlg = LocationDialog(src, lat, lon, parent)
     if dlg.exec() == QDialog.Accepted:
