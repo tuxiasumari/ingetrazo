@@ -193,6 +193,9 @@ class Viewport(QOpenGLWidget):
     # Soft warm white painted on faces with no material colour — like the matte
     # cardstock of an architecture model (SketchUp's near-white default).
     DEFAULT_FACE_COLOR = (0.96, 0.95, 0.925)
+    # Fixed world light (from above, slightly front-right) for the subtle diffuse
+    # face shading. World-fixed so shading is stable while orbiting, like SketchUp.
+    _LIGHT = QVector3D(0.35, 0.25, 1.0).normalized()
 
     # Tooltip text shown next to the snap marker, SketchUp-style. English source
     # strings; translated at draw time via ``tr`` (see i18n/es.json).
@@ -731,6 +734,19 @@ class Viewport(QOpenGLWidget):
     def _set_color(self, r: float, g: float, b: float, a: float) -> None:
         self._program.setUniformValue(self._loc_color, QVector4D(r, g, b, a))
 
+    def _shaded_color(self, base, normal):
+        """Multiply ``base`` RGB by a subtle diffuse term from the face normal vs
+        the fixed world light — the matte-model shading. Returns a clamped RGB
+        tuple used as the render key (identical normals/colours group together)."""
+        if normal.length() < 1e-9:
+            shade = 0.90
+        else:
+            d = QVector3D.dotProduct(normal.normalized(), self._LIGHT)  # -1..1
+            shade = 0.80 + 0.20 * d                                     # 0.60..1.0
+        return (min(1.0, base[0] * shade),
+                min(1.0, base[1] * shade),
+                min(1.0, base[2] * shade))
+
     # ---- Base-map tiles (Track G) -------------------------------------------
     def _base_map_showing(self) -> bool:
         """True when a georeferenced base map is currently visible."""
@@ -1080,7 +1096,12 @@ class Viewport(QOpenGLWidget):
                 self._append_textured_face(by_texture, face, tex)
                 continue
             col = face.attrs.get("color")
-            key = tuple(col) if col is not None else self.DEFAULT_FACE_COLOR
+            base = tuple(col) if col is not None else self.DEFAULT_FACE_COLOR
+            # Bake a subtle diffuse shade from the face normal against a fixed
+            # world light — the matte-model look of SketchUp. World-fixed, so it
+            # doesn't change as you orbit; faces sharing a normal+colour share the
+            # shaded key, keeping the draw-call count low.
+            key = self._shaded_color(base, face.normal())
             buf = by_color.get(key)
             if buf is None:
                 buf = by_color[key] = array("f")
@@ -1248,13 +1269,17 @@ class Viewport(QOpenGLWidget):
         if not faces:
             return
         data = array("f")
+        runs = []                        # (shaded_rgb, start_vertex, count)
         for face in faces:
+            start = len(data) // 3
             for t0, t1, t2 in face.triangulate():
                 data.extend([
                     t0.x(), t0.y(), t0.z(),
                     t1.x(), t1.y(), t1.z(),
                     t2.x(), t2.y(), t2.z(),
                 ])
+            runs.append((self._shaded_color(self.DEFAULT_FACE_COLOR, face.normal()),
+                         start, len(data) // 3 - start))
         if not data:
             return
         self._preview_faces_vbo.bind()
@@ -1264,9 +1289,10 @@ class Viewport(QOpenGLWidget):
 
         self._gl.glEnable(GL_POLYGON_OFFSET_FILL)
         self._gl.glPolygonOffset(1.0, 1.0)
-        self._set_color(*self.DEFAULT_FACE_COLOR, 1.0)  # same as real faces
         self._preview_faces_vao.bind()
-        self._gl.glDrawArrays(GL_TRIANGLES, 0, len(data) // 3)
+        for (r, g, b), start, count in runs:
+            self._set_color(r, g, b, 1.0)
+            self._gl.glDrawArrays(GL_TRIANGLES, start, count)
         self._preview_faces_vao.release()
         self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
 
