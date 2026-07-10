@@ -486,6 +486,36 @@ class ToggleGeoPathClosedCommand(Command):
     undo = _flip
 
 
+class SetGeoPathSurfaceCommand(Command):
+    """Set the terrain-surface mode (None/"flat"/"draped") on georef paths.
+
+    A surface implies a closed polygon, so this also closes the path; undo
+    restores the prior mode and closed flag. Built triangles are recomputed
+    outside (they depend on the DEM), so they're just cleared here.
+    """
+
+    def __init__(self, paths, mode) -> None:
+        self.mode = mode
+        self._paths = list(paths)
+        self._prev: list = []
+
+    def do(self, scene) -> None:
+        self._prev = [(p, p.surface, p.closed) for p in self._paths]
+        for p in self._paths:
+            p.surface = self.mode
+            if self.mode:
+                p.closed = True
+            p._surface_tris = None
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for p, surface, closed in self._prev:
+            p.surface = surface
+            p.closed = closed
+            p._surface_tris = None
+        scene.version += 1
+
+
 class MoveGeoPathNodeCommand(Command):
     """Move one node of a georef path to a new position (undoable)."""
 

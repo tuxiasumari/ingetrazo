@@ -23,10 +23,17 @@ from PySide6.QtGui import QVector3D
 class GeoPath:
     """An ordered polyline of local-metre nodes (a road, boundary, alignment)."""
 
-    def __init__(self, points, closed: bool = False, name: str = "") -> None:
+    def __init__(self, points, closed: bool = False, name: str = "",
+                 surface: str | None = None) -> None:
         self.points: list[QVector3D] = [QVector3D(p) for p in points]
         self.closed = bool(closed)
         self.name = name
+        # Terrain-surface fill mode: None (line only), "flat" (single best-fit
+        # slope plane) or "draped" (follows the DEM relief). A surface implies a
+        # closed polygon. ``_surface_tris`` caches the built 3D triangles (not
+        # serialised) — recomputed from the DEM when nodes move.
+        self.surface = surface
+        self._surface_tris = None
 
     # ---- Geometry -----------------------------------------------------------
     def segments(self):
@@ -56,10 +63,13 @@ class GeoPath:
             entry["closed"] = True
         if self.name:
             entry["name"] = self.name
+        if self.surface:
+            entry["surface"] = self.surface
         return entry
 
     @classmethod
     def from_dict(cls, data: dict) -> "GeoPath":
         return cls([QVector3D(*p) for p in data.get("points", [])],
                    closed=data.get("closed", False),
-                   name=data.get("name", ""))
+                   name=data.get("name", ""),
+                   surface=data.get("surface"))

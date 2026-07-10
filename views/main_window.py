@@ -114,6 +114,8 @@ class MainWindow(QMainWindow):
         self.profile_dock.hide()
         self.viewport.sceneVersionChanged.connect(
             lambda _v: self.profile_dock.on_scene_changed())
+        self.viewport.sceneVersionChanged.connect(
+            lambda _v: self._on_surfaces_scene_changed())
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar(tr("Main"), self)
@@ -566,6 +568,16 @@ class MainWindow(QMainWindow):
 
         if has_geopath:
             menu.addAction(tr("Terrain profile"), self._on_terrain_profile)
+            closed_paths = [e for e in sel
+                            if isinstance(e, GeoPath) and len(e.points) >= 3]
+            if closed_paths:
+                surf = menu.addMenu(tr("Terrain surface"))
+                surf.addAction(tr("Flat (single slope)"),
+                               lambda: self._on_set_surface("flat"))
+                surf.addAction(tr("Draped (follow relief)"),
+                               lambda: self._on_set_surface("draped"))
+                surf.addAction(tr("None (line only)"),
+                               lambda: self._on_set_surface(None))
             menu.addAction(tr("Convert Path to Geometry"), self._on_convert_geopath)
             menu.addAction(tr("Open / Close path"), self._on_toggle_path_closed)
             menu.addSeparator()
@@ -648,6 +660,62 @@ class MainWindow(QMainWindow):
         cursor in the open profile (Track G)."""
         if self.profile_dock.isVisible():
             self.profile_dock.indicate_at_screen(screen_x, screen_y)
+
+    # ---- Terrain-surface fill (Track G) -------------------------------------
+    def _surface_dem(self, datum):
+        """Shared DEM sampler for surface fills, rebuilt when the datum changes."""
+        if getattr(self, "_surf_sampler", None) is not None \
+                and self._surf_datum is datum:
+            return self._surf_sampler
+        from georef.dem import DEMSampler
+        self._surf_sampler = DEMSampler(datum, parent=self)
+        self._surf_datum = datum
+        self._surf_sampler.changed.connect(self._rebuild_surfaces)
+        return self._surf_sampler
+
+    def _on_set_surface(self, mode) -> None:
+        from georef.geopath import GeoPath
+        from core.history import SetGeoPathSurfaceCommand
+        paths = [p for p in self.viewport.scene.selection
+                 if isinstance(p, GeoPath) and len(p.points) >= 3]
+        if not paths:
+            return
+        self.viewport.history.execute(SetGeoPathSurfaceCommand(paths, mode))
+        self._rebuild_surfaces()
+
+    def _rebuild_surfaces(self) -> None:
+        """(Re)compute the 3D triangles of every surfaced path from the DEM."""
+        from georef.surface import build_surface
+        scene = self.viewport.scene
+        datum = getattr(scene, "georef", None)
+        surfaced = [p for p in scene.geo_paths if getattr(p, "surface", None)]
+        if datum is None:
+            for p in surfaced:
+                p._surface_tris = None
+            self.viewport.update()
+            return
+        sampler = self._surface_dem(datum)
+        area = None
+        for p in surfaced:
+            xs = [pt.x() for pt in p.points]
+            ys = [pt.y() for pt in p.points]
+            lo = self._local_to_ll(datum, min(xs), min(ys))
+            hi = self._local_to_ll(datum, max(xs), max(ys))
+            sampler.ensure_area(min(lo[0], hi[0]), min(lo[1], hi[1]),
+                                max(lo[0], hi[0]), max(lo[1], hi[1]))
+            p._surface_tris = build_surface(p, sampler, datum)
+        self.viewport.update()
+
+    @staticmethod
+    def _local_to_ll(datum, x, y):
+        from PySide6.QtGui import QVector3D
+        lat, lon, _ = datum.local_to_geodetic(QVector3D(x, y, 0.0))
+        return lat, lon
+
+    def _on_surfaces_scene_changed(self) -> None:
+        """Re-drape surfaced paths when their nodes move (version bump)."""
+        if any(getattr(p, "surface", None) for p in self.viewport.scene.geo_paths):
+            self._rebuild_surfaces()
 
     # ---- Undo / redo --------------------------------------------------------
     def _on_undo(self) -> None:

@@ -1175,6 +1175,9 @@ class Viewport(QOpenGLWidget):
         # the extrusion is snapping level with).
         self._draw_inference_marker(painter)
 
+        # Terrain-surface fills (draped / flat) under the georef paths — Track G.
+        self._draw_geo_surfaces(painter)
+
         # Traced georef paths (roads / boundaries) — Track G.
         self._draw_geo_paths(painter)
 
@@ -1311,6 +1314,43 @@ class Viewport(QOpenGLWidget):
             painter.drawText(QPointF(px + 11, py + 17), label)
             painter.setPen(QPen(color))
             painter.drawText(QPointF(px + 10, py + 16), label)
+
+    def _draw_geo_surfaces(self, painter: QPainter) -> None:
+        """Draw terrain-surface fills as shaded, back-to-front triangles so the
+        relief reads in 3D (Track G). Semi-transparent, so the base map shows."""
+        paths = getattr(self.scene, "geo_paths", None)
+        if not paths:
+            return
+        eye = self.camera.eye()
+        light = QVector3D(0.3, 0.4, 0.85)
+        light = light.normalized()
+        for path in paths:
+            tris = getattr(path, "_surface_tris", None)
+            if not tris:
+                continue
+            flat = getattr(path, "surface", None) == "flat"
+            # Painter's algorithm: far triangles first.
+            ordered = sorted(
+                tris, key=lambda t: -((t[0] + t[1] + t[2]) - eye * 3.0).lengthSquared())
+            painter.setPen(Qt.NoPen)
+            for v0, v1, v2 in ordered:
+                p0 = self._world_to_pixel(v0)
+                p1 = self._world_to_pixel(v1)
+                p2 = self._world_to_pixel(v2)
+                if p0 is None or p1 is None or p2 is None:
+                    continue
+                # Flat shading from the face normal (relief legibility).
+                n = QVector3D.crossProduct(v1 - v0, v2 - v0)
+                if n.length() > 1e-9:
+                    n = n.normalized()
+                shade = 0.55 + 0.45 * max(0.0, abs(QVector3D.dotProduct(n, light)))
+                if flat:
+                    col = QColor(int(90 * shade), int(120 * shade), int(200 * shade), 150)
+                else:
+                    col = QColor(int(120 * shade), int(160 * shade), int(90 * shade), 150)
+                painter.setBrush(col)
+                painter.drawPolygon(QPolygonF([QPointF(*p0), QPointF(*p1), QPointF(*p2)]))
+            painter.setBrush(Qt.NoBrush)
 
     def _draw_geo_paths(self, painter: QPainter) -> None:
         """Draw committed georef paths (roads / boundaries): a coloured polyline
