@@ -871,50 +871,78 @@ class Viewport(QOpenGLWidget):
             return None
         return origin + direction * t
 
-    # View-driven map: how far a horizon view may reach, and the per-frame tile
-    # budget (zoom drops until the visible set fits — bounds work + memory).
+    # How far a horizon view may reach, target on-screen tile size (LOD error),
+    # and the per-frame tile budget — bounds work + memory in wide/tilted views.
     _VIEW_MAX_HALF_M = 200_000.0
-    _VIEW_TILE_BUDGET = 240
+    _TILE_TARGET_PX = 384.0
+    _VIEW_TILE_BUDGET = 220
+
+    def _camera_key(self):
+        c = self.camera
+        return (round(c.yaw, 4), round(c.pitch, 4), round(c.distance, 2),
+                round(c.target.x(), 2), round(c.target.y(), 2),
+                round(c.target.z(), 2), self.width(), self.height(),
+                getattr(c, "perspective", True))
 
     def _view_tiles(self, datum):
-        """The tiles + LOD zoom covering what the camera currently sees, or
-        ``None`` — the heart of the view-driven (streaming) base map."""
-        from georef.tiles import tiles_covering, zoom_for_mpp
+        """Quadtree-LOD tiles covering what the camera sees — a mixed-zoom,
+        gap-free partition (near-detailed, far-coarse). Cached per camera pose so
+        tile-arrival repaints don't recompute it."""
+        key = self._camera_key()
+        cache = getattr(self, "_view_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+
+        from georef.quadtree import select_tiles
+        from georef.tiles import tile_bbox, tiles_covering
         w, h = self.width(), self.height()
         center = self._ground_at_pixel(w / 2.0, h / 2.0)
-        if center is None:
-            return None
-        pts = []
-        for sy in (1.0, h / 2.0, h - 1.0):
-            for sx in (1.0, w / 2.0, w - 1.0):
-                g = self._ground_at_pixel(sx, sy)
-                if g is not None:
-                    pts.append(g)
-        if not pts:
+        pts = [g for sy in (1.0, h / 2.0, h - 1.0) for sx in (1.0, w / 2.0, w - 1.0)
+               if (g := self._ground_at_pixel(sx, sy)) is not None]
+        if center is None or not pts:
+            self._view_cache = (key, None)
             return None
         cap = self._VIEW_MAX_HALF_M
         minx = max(min(p.x() for p in pts), center.x() - cap)
         maxx = min(max(p.x() for p in pts), center.x() + cap)
         miny = max(min(p.y() for p in pts), center.y() - cap)
         maxy = min(max(p.y() for p in pts), center.y() + cap)
-        # Ground resolution (m/px) at screen centre → LOD zoom.
-        c1 = self._ground_at_pixel(w / 2.0 + 1.0, h / 2.0)
-        mpp = (c1 - center).length() if c1 is not None else 1.0
-        clat, _, _ = datum.local_to_geodetic(center)
         max_zoom = getattr(self.scene.tile_layer.source, "max_zoom", 19)
-        zoom = zoom_for_mpp(mpp, clat, max_zoom=max_zoom)
 
         def ll(x, y):
             la, lo, _ = datum.local_to_geodetic(QVector3D(x, y, 0.0))
             return la, lo
         (s_lat, w_lon), (n_lat, e_lon) = ll(minx, miny), ll(maxx, maxy)
-        tiles = tiles_covering(min(s_lat, n_lat), min(w_lon, e_lon),
-                               max(s_lat, n_lat), max(w_lon, e_lon), zoom)
-        while len(tiles) > self._VIEW_TILE_BUDGET and zoom > 1:
-            zoom -= 1
-            tiles = tiles_covering(min(s_lat, n_lat), min(w_lon, e_lon),
-                                   max(s_lat, n_lat), max(w_lon, e_lon), zoom)
-        return zoom, tiles
+        bbox = (min(s_lat, n_lat), min(w_lon, e_lon),
+                max(s_lat, n_lat), max(w_lon, e_lon))
+        # Coarse start level: the finest zoom still covering the view in ≤8 tiles;
+        # the quadtree refines from there where the ground is close to the camera.
+        start_zoom = 1
+        for z in range(1, max_zoom + 1):
+            if len(tiles_covering(*bbox, z)) <= 8:
+                start_zoom = z
+            else:
+                break
+        start_tiles = [(x, y, start_zoom) for x, y in tiles_covering(*bbox, start_zoom)]
+
+        def footprint(x, y, z):
+            lat_s, lon_w, lat_n, lon_e = tile_bbox(x, y, z)
+            corners, behind = [], 0
+            for la, lo in ((lat_n, lon_w), (lat_n, lon_e),
+                           (lat_s, lon_e), (lat_s, lon_w)):
+                loc = datum.geodetic_to_local(la, lo)
+                p = self._world_to_pixel(QVector3D(loc.x(), loc.y(), 0.0))
+                if p is None:
+                    behind += 1
+                else:
+                    corners.append(p)
+            return corners, behind
+
+        tiles = select_tiles(footprint, w, h, start_tiles, max_zoom=max_zoom,
+                             target_px=self._TILE_TARGET_PX,
+                             budget=self._VIEW_TILE_BUDGET)
+        self._view_cache = (key, tiles)
+        return tiles
 
     def _render_tiles(self) -> None:
         if self._terrain_showing():
@@ -924,28 +952,35 @@ class Viewport(QOpenGLWidget):
         if layer is None or datum is None or not getattr(layer, "visible", False):
             return
         try:
-            view = self._view_tiles(datum)
+            tiles = self._view_tiles(datum)
         except Exception:
             return
-        if view is None:
+        if not tiles:
             return
-        zoom, tiles = view
+        # Build one batched VBO of every ready tile quad, then draw per texture —
+        # no per-tile buffer re-allocation (the hot path in wide views).
+        raw = array("f")
+        runs = []
+        for (x, y, z) in tiles:
+            tex = self._tile_texture(layer.source, x, y, z)
+            if tex is None:
+                continue
+            start = len(raw) // 5
+            for pos, (u, v) in layer.quad_local(datum, x, y, z):
+                raw.extend([pos.x(), pos.y(), pos.z(), u, v])
+            runs.append((tex, start))
+        if not runs:
+            return
         self._program.setUniformValue(self._loc_use_tex, 1)
         self._gl.glDepthMask(GL_FALSE)
         self._tile_quad_vao.bind()
-        for (x, y) in tiles:
-            tex = self._tile_texture(layer.source, x, y, zoom)
-            if tex is None:
-                continue
-            raw = array("f")
-            for pos, (u, v) in layer.quad_local(datum, x, y, zoom):
-                raw.extend([pos.x(), pos.y(), pos.z(), u, v])
-            data = raw.tobytes()
-            self._tile_quad_vbo.bind()
-            self._tile_quad_vbo.allocate(data, len(data))
-            self._tile_quad_vbo.release()
+        self._tile_quad_vbo.bind()
+        data = raw.tobytes()
+        self._tile_quad_vbo.allocate(data, len(data))
+        self._tile_quad_vbo.release()
+        for tex, start in runs:
             tex.bind(0)
-            self._gl.glDrawArrays(GL_TRIANGLES, 0, 6)
+            self._gl.glDrawArrays(GL_TRIANGLES, start, 6)
             tex.release(0)
         self._tile_quad_vao.release()
         self._gl.glDepthMask(GL_TRUE)
