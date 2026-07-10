@@ -617,10 +617,12 @@ class MoveVerticesCommand(Command):
     planar pieces along fold edges (SketchUp behaviour — a quad with a lifted
     corner becomes two triangles, not a fake bent "face").
 
-    A plain move undoes by the inverse translation; when folding restructured
-    topology, undo restores the pre-move snapshot instead (the fold's new
-    edges/faces have no clean per-op inverse) and redo restores the captured
-    result."""
+    Undo/redo restore identity-preserving snapshots. The old "cheap" inverse
+    translation resolved vertices *by position*, so when a moved corner landed
+    exactly on another vertex (an endpoint snap does this constantly) the undo
+    dragged the innocent coincident vertex along too, warping the drawing. The
+    before-snapshot was already being captured every time — restoring it is the
+    exact inverse for every case (plain move, fold, landed-on-vertex)."""
 
     def __init__(self, positions: Iterable[QVector3D], delta: QVector3D) -> None:
         self.src = [QVector3D(p) for p in positions]
@@ -629,22 +631,19 @@ class MoveVerticesCommand(Command):
         self._after: Optional[dict] = None
 
     def do(self, scene) -> None:
-        if self._after is not None:  # redo of a folding move
+        if self._after is not None:  # redo
             scene.mesh.restore_state(self._after)
             scene.version += 1
             return
-        before = scene.mesh.capture_state()
+        self._before = scene.mesh.capture_state()
         translate_points(scene, {_key(p) for p in self.src}, self.delta)
-        if fold_nonplanar_faces(scene.mesh):
-            self._before = before
-            self._after = scene.mesh.capture_state()
+        fold_nonplanar_faces(scene.mesh)
+        self._after = scene.mesh.capture_state()
 
     def undo(self, scene) -> None:
         if self._before is not None:
             scene.mesh.restore_state(self._before)
             scene.version += 1
-            return
-        translate_points(scene, {_key(p + self.delta) for p in self.src}, -self.delta)
 
 
 class PruneOrphanEdgesCommand(Command):

@@ -26,7 +26,7 @@ from PySide6.QtGui import QVector3D
 
 from core.group import Group
 from core.mesh import Edge, Face
-from core.history import MoveGroupCommand, MoveVerticesCommand, translate_points
+from core.history import MoveGroupCommand, MoveVerticesCommand
 from core.topology import _key
 from tools.base import Tool, ToolContext
 
@@ -53,6 +53,7 @@ class MoveTool(Tool):
         self.hover_point: QVector3D | None = None
         self.chain_first_point: QVector3D | None = None  # silence close-snap
         self._positions: list[QVector3D] = []  # unique positions to translate
+        self._verts: list = []                 # resolved vertex objects (identity)
         self._group: Group | None = None       # set when moving a whole group
         self._preview_delta = QVector3D(0.0, 0.0, 0.0)  # currently applied live
 
@@ -75,6 +76,12 @@ class MoveTool(Tool):
             self.grab = ctx.world
             self._group = group
             self._positions = positions
+            # Resolve the grabbed positions to vertex OBJECTS once: the live
+            # preview then moves these identities directly, so dragging through
+            # (or onto) a coincident vertex never drags the innocent one along.
+            mesh = viewport.scene.mesh
+            self._verts = [v for v in (mesh.vertex_at(p) for p in positions)
+                           if v is not None]
             return
         self._commit(viewport, ctx.world - self.grab)
 
@@ -163,14 +170,15 @@ class MoveTool(Tool):
 
     def _shift(self, viewport, step: QVector3D) -> None:
         """Translate the live geometry by ``step`` — a whole group's mesh, or the
-        loose positions (everything coincident follows)."""
+        grabbed vertex objects (identity-exact: apply and revert stay symmetric
+        even when the drag crosses another vertex's position)."""
         if self._group is not None:
             for v in list(self._group.mesh.vertices):
                 self._group.mesh.move_vertex(v, step)
-            viewport.scene.version += 1
         else:
-            keys = {_key(p + self._preview_delta) for p in self._positions}
-            translate_points(viewport.scene, keys, step)
+            for v in self._verts:
+                viewport.scene.mesh.move_vertex(v, step)
+        viewport.scene.version += 1
 
     def _apply_preview(self, viewport, target_delta: QVector3D) -> None:
         """Live-deform the scene so the current offset is ``target_delta`` from
@@ -206,5 +214,6 @@ class MoveTool(Tool):
         self.grab = None
         self.hover_point = None
         self._positions = []
+        self._verts = []
         self._group = None
         self._preview_delta = QVector3D(0.0, 0.0, 0.0)
