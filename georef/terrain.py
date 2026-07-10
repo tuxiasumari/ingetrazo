@@ -130,7 +130,7 @@ def build_mosaic(terrain: TerrainObject, images: dict) -> QImage | None:
     """
     tx0, ty0, ntx, nty, zoom = terrain.tile_range
     mosaic = QImage(ntx * TILE_PX, nty * TILE_PX, QImage.Format.Format_RGB32)
-    mosaic.fill(0)
+    mosaic.fill(0xFF8A8A8A)   # neutral grey so still-loading tiles don't read black
     painter = QPainter(mosaic)
     any_tile = False
     for (x, y, z), img in images.items():
