@@ -111,15 +111,21 @@ def _axes_vertices(pos_len: float = 1.0e5):
     dirs = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
     coords = array("f")
     spans: dict[str, tuple[int, int]] = {}
+    base, growth, dash_frac, n = 0.5, 1.4, 0.5, 40
     for name, (dx, dy, dz) in dirs.items():
         start = len(coords) // 3
+        # Positive: one long solid segment.
         coords.extend([0.0, 0.0, 0.0, dx * pos_len, dy * pos_len, dz * pos_len])
-        base, growth = 0.3, 1.35
-        for k in range(40):
-            s = base * (growth ** k)
-            e = s * 1.5
-            coords.extend([-dx * s, -dy * s, -dz * s,
-                           -dx * e, -dy * e, -dz * e])
+        # Negative: dashes filling the first ``dash_frac`` of each interval
+        # ``[prev, base*growth**k]`` — starts AT the origin, real gaps between
+        # dashes, and each interval grows so ~40 reach effectively infinity.
+        prev = 0.0
+        for k in range(n):
+            nxt = base * (growth ** k)
+            end = prev + dash_frac * (nxt - prev)
+            coords.extend([-dx * prev, -dy * prev, -dz * prev,
+                           -dx * end, -dy * end, -dz * end])
+            prev = nxt
         spans[name] = (start, len(coords) // 3 - start)
     return coords, spans
 
