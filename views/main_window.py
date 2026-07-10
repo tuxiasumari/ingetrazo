@@ -204,10 +204,23 @@ class MainWindow(QMainWindow):
         act_ze.setToolTip(f"{tr('Zoom Extents')}  (F2)")
         act_ze.triggered.connect(self._on_zoom_extents)
         view_tb.addAction(act_ze)
-        act_iso = QAction(tool_icon("view_iso"), tr("Isometric"), self)
-        act_iso.setToolTip(tr("Isometric"))
-        act_iso.triggered.connect(lambda: self._on_standard_view("iso"))
-        view_tb.addAction(act_iso)
+
+        # Standard-views toolbar: one-shot camera orientations, icon-only.
+        views_tb = self._new_toolbar(tr("Standard Views"), "views")
+        self.toolbars["views"] = views_tb
+        for key, label, icon in [
+            ("iso", "Isometric", "view_iso"),
+            ("top", "Top", "view_top"),
+            ("bottom", "Bottom", "view_bottom"),
+            ("front", "Front", "view_front"),
+            ("back", "Back", "view_back"),
+            ("left", "Left", "view_left"),
+            ("right", "Right", "view_right"),
+        ]:
+            act = QAction(tool_icon(icon), tr(label), self)
+            act.setToolTip(tr(label))
+            act.triggered.connect(lambda _c, k=key: self._on_standard_view(k))
+            views_tb.addAction(act)
 
     def _build_menubar(self) -> None:
         menubar = self.menuBar()

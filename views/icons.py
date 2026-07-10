@@ -209,17 +209,57 @@ def _zoom_extents(p, ink):
         p.drawLine(QPointF(cx, cy), QPointF(cx, cy + 7 * sy))
 
 
-def _view_iso(p, ink):
-    # A cube seen in iso: hexagon outline + a Y to the centre.
+def _iso_cube():
+    """Iso-cube geometry: outer hexagon + the 3 visible-face split points.
+
+    Returns ``(hexagon_points, centre, top_face, left_face, right_face)`` where
+    each face is a 4-point polygon of the cube's visible top/left/right face."""
     pts = []
     for i in range(6):
         a = math.radians(60 * i - 90)
         pts.append(QPointF(24 + 14 * math.cos(a), 24 + 14 * math.sin(a)))
+    c = QPointF(24, 24)
+    # Hexagon vertices (i): 0 top, 1 up-right, 2 down-right, 3 bottom,
+    # 4 down-left, 5 up-left. Faces meet at the centre.
+    top = QPolygonF([pts[5], pts[0], pts[1], c])
+    right = QPolygonF([pts[1], pts[2], pts[3], c])
+    left = QPolygonF([pts[3], pts[4], pts[5], c])
+    return pts, c, top, left, right
+
+
+def _view_iso(p, ink):
+    pts, c, _, _, _ = _iso_cube()
     p.setBrush(Qt.NoBrush)
     p.drawPolygon(QPolygonF(pts))
-    c = QPointF(24, 24)
     for i in (0, 2, 4):
         p.drawLine(c, pts[i])
+
+
+def _view_cube(face, filled):
+    """Cube-view icon: highlight one of the 3 iso-visible faces (top/left/right).
+
+    ``filled`` marks the near view (solid accent face); a hollow accent outline
+    marks the opposite/far view — so each axis pair (top↔bottom, front↔back,
+    right↔left) is distinct and reads consistently."""
+    def draw(p, ink):
+        pts, c, top, left, right = _iso_cube()
+        poly = {"top": top, "left": left, "right": right}[face]
+        p.save()
+        if filled:
+            p.setPen(Qt.NoPen)
+            p.setBrush(_accent())
+        else:
+            pen = QPen(_accent(), 2.4)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+        p.drawPolygon(poly)
+        p.restore()
+        p.setBrush(Qt.NoBrush)
+        p.drawPolygon(QPolygonF(pts))
+        for i in (0, 2, 4):
+            p.drawLine(c, pts[i])
+    return draw
 
 
 _DRAW = {
@@ -229,6 +269,13 @@ _DRAW = {
     "move": _move, "paint": _paint, "dimension": _dimension,
     "geopath": _geopath, "orbit": _orbit, "pan": _pan,
     "zoom_extents": _zoom_extents, "view_iso": _view_iso,
+    # Standard views — solid face = near, hollow face = opposite.
+    "view_top": _view_cube("top", True),
+    "view_bottom": _view_cube("top", False),
+    "view_front": _view_cube("left", True),
+    "view_back": _view_cube("left", False),
+    "view_right": _view_cube("right", True),
+    "view_left": _view_cube("right", False),
 }
 
 
