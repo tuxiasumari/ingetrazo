@@ -623,38 +623,57 @@ class EntityInfoPanel(QWidget):
         return "—"
 
 
+def _scrolled(sections) -> QScrollArea:
+    """A scroll area wrapping a vertical stack of collapsible sections."""
+    inner = QWidget()
+    col = QVBoxLayout(inner)
+    col.setContentsMargins(0, 0, 0, 0)
+    col.setSpacing(2)
+    for title, widget in sections:
+        col.addWidget(_Section(title, widget))
+    col.addStretch(1)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setWidget(inner)
+    scroll.setMinimumWidth(240)
+    return scroll
+
+
 class Tray(QDockWidget):
-    """The right-side tray assembling the three panels."""
+    """Right-side **Properties** dock: what you're working with — the selection's
+    info, materials, and annotation styles (context, not geo workspace)."""
 
     def __init__(self, window) -> None:
-        super().__init__(tr("Tray"), window)
+        super().__init__(tr("Properties"), window)
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.setFeatures(QDockWidget.DockWidgetMovable
                          | QDockWidget.DockWidgetFloatable)
 
-        self.base_map = BaseMapPanel(window)
+        self.entity_info = EntityInfoPanel(window)
         self.materials = MaterialsPanel(window)
         self.dim_style = DimensionStylePanel(window)
-        self.entity_info = EntityInfoPanel(window)
-
-        inner = QWidget()
-        col = QVBoxLayout(inner)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(2)
-        col.addWidget(_Section(tr("Base map"), self.base_map))
-        col.addWidget(_Section(tr("Materials"), self.materials))
-        col.addWidget(_Section(tr("Dimension style"), self.dim_style))
-        col.addWidget(_Section(tr("Entity info"), self.entity_info))
-        col.addStretch(1)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(inner)
-        scroll.setMinimumWidth(240)
-        self.setWidget(scroll)
+        self.setWidget(_scrolled([
+            (tr("Entity info"), self.entity_info),
+            (tr("Materials"), self.materials),
+            (tr("Dimension style"), self.dim_style),
+        ]))
 
     def on_scene_changed(self) -> None:
-        """React to a scene/version change: refresh selection-driven views."""
         self.entity_info.refresh()
         self.materials.refresh_in_model()
+
+
+class GeorefTray(QDockWidget):
+    """Right-side **Georef** dock: the location workspace — base map source,
+    search/locate, capture area, 3D terrain (kept apart from properties)."""
+
+    def __init__(self, window) -> None:
+        super().__init__(tr("Georef"), window)
+        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.setFeatures(QDockWidget.DockWidgetMovable
+                         | QDockWidget.DockWidgetFloatable)
+        self.base_map = BaseMapPanel(window)
+        self.setWidget(_scrolled([(tr("Base map"), self.base_map)]))
+
+    def on_scene_changed(self) -> None:
         self.base_map.on_scene_changed()

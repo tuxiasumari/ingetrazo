@@ -48,7 +48,7 @@ from tools.paste import PasteTool
 from tools.pushpull import PushPullTool
 from tools.rectangle import RectangleTool
 from tools.select import SelectTool
-from views.tray import Tray
+from views.tray import GeorefTray, Tray
 from views.viewport import Viewport
 
 
@@ -102,10 +102,18 @@ class MainWindow(QMainWindow):
         self.viewport.sceneVersionChanged.connect(self._on_scene_version_changed)
 
     def _build_tray(self) -> None:
+        # Two role-based right-side docks (tabbed): Properties (what you're
+        # working with) and Georef (the location workspace).
         self.tray = Tray(self)
+        self.georef_tray = GeorefTray(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.tray)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.georef_tray)
+        self.tabifyDockWidget(self.tray, self.georef_tray)
+        self.tray.raise_()
         self.viewport.sceneVersionChanged.connect(
             lambda _v: self.tray.on_scene_changed())
+        self.viewport.sceneVersionChanged.connect(
+            lambda _v: self.georef_tray.on_scene_changed())
 
         # Terrain profile dock (Track G, G4) — hidden until requested.
         from views.profile_panel import ProfileDock
@@ -126,17 +134,31 @@ class MainWindow(QMainWindow):
         self._tool_group = QActionGroup(self)
         self._tool_group.setExclusive(True)
 
-        for key, tool in self._tools.items():
-            name = tr(tool.name)
-            label = f"{name} ({tool.shortcut})" if tool.shortcut else name
-            action = QAction(label, self)
-            action.setCheckable(True)
-            if tool.shortcut:
-                action.setShortcut(QKeySequence(tool.shortcut))
-            action.triggered.connect(lambda _checked, k=key: self._activate_tool(k))
-            self._tool_group.addAction(action)
-            toolbar.addAction(action)
-            self._tool_actions[key] = action
+        # Tools grouped by task (separators between groups), like QGIS/SketchUp.
+        # Select stands alone; then Draw, Modify, Annotate, Georef.
+        groups = [
+            ["select"],
+            ["line", "rectangle", "rotated_rect", "circle", "polygon", "arc", "arc3"],
+            ["pushpull", "offset", "move", "paint"],
+            ["dimension"],
+            ["geopath"],
+        ]
+        for gi, keys in enumerate(groups):
+            if gi > 0:
+                toolbar.addSeparator()
+            for key in keys:
+                tool = self._tools[key]
+                name = tr(tool.name)
+                label = f"{name} ({tool.shortcut})" if tool.shortcut else name
+                action = QAction(label, self)
+                action.setCheckable(True)
+                if tool.shortcut:
+                    action.setShortcut(QKeySequence(tool.shortcut))
+                action.triggered.connect(
+                    lambda _checked, k=key: self._activate_tool(k))
+                self._tool_group.addAction(action)
+                toolbar.addAction(action)
+                self._tool_actions[key] = action
 
         # Spacebar returns to Select, like SketchUp's pointer. Keep "S" too.
         select_action = self._tool_actions["select"]
@@ -234,8 +256,12 @@ class MainWindow(QMainWindow):
         view_menu = menubar.addMenu(tr("View"))
 
         toggle_tray = self.tray.toggleViewAction()
-        toggle_tray.setText(tr("Tray (Materials / Dimensions / Info)"))
+        toggle_tray.setText(tr("Properties panel"))
         view_menu.addAction(toggle_tray)
+
+        toggle_georef = self.georef_tray.toggleViewAction()
+        toggle_georef.setText(tr("Georef panel"))
+        view_menu.addAction(toggle_georef)
 
         toggle_profile = self.profile_dock.toggleViewAction()
         toggle_profile.setText(tr("Terrain profile"))
@@ -922,7 +948,8 @@ class MainWindow(QMainWindow):
             cmds[0] if len(cmds) == 1 else CompoundCommand(cmds))
 
         # Sync the base-map panel + set a reference capture around the import.
-        self.tray.base_map.setup_for_import(datum, scene.geo_paths)
+        self.georef_tray.base_map.setup_for_import(datum, scene.geo_paths)
+        self.georef_tray.raise_()
         # Frame the imported traces (top view).
         self._frame_geo_paths(scene.geo_paths)
         self.statusBar().showMessage(
