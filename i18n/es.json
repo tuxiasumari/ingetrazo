@@ -172,6 +172,8 @@
   "Latitude:": "Latitud:",
   "Longitude:": "Longitud:",
   "Zoom:": "Zoom:",
+  "Capture width (m):": "Ancho de captura (m):",
+  "Capture length (m):": "Largo de captura (m):",
   "Go to location": "Ir a la ubicación",
   "Search location…": "Buscar ubicación…",
   "Set project location": "Fijar ubicación del proyecto",

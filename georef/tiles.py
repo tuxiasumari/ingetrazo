@@ -169,16 +169,44 @@ class TileLayer:
         self.visible = True
         # (x, y, z) -> QImage, populated asynchronously by the fetcher.
         self.images: dict[tuple[int, int, int], object] = {}
+        # Capture patches: local-metre rectangles ``(cx, cy, hw, hh)`` that the
+        # base map covers. A single site is one square; a road is a long strip;
+        # a zig-zag is several small patches — so coverage follows what you need
+        # and stays bounded (never a giant square of empty area). Static: the
+        # union of their tiles is loaded once. Defaults to the ±radius square.
+        self.patches: list[tuple[float, float, float, float]] = [
+            (0.0, 0.0, self.radius_m, self.radius_m)]
 
-    def visible_tiles(self, datum) -> list[tuple[int, int]]:
-        """Tile indices covering a ``±radius_m`` square around the datum."""
-        r = self.radius_m
+    def set_rectangle(self, width_m: float, length_m: float,
+                      cx: float = 0.0, cy: float = 0.0) -> None:
+        """Replace the capture with one rectangle ``width_m`` (E-W) × ``length_m``
+        (N-S) centred at local ``(cx, cy)`` — a strip for a straight road."""
+        self.patches = [(cx, cy, width_m / 2.0, length_m / 2.0)]
+
+    def add_patch(self, cx: float, cy: float, hw: float, hh: float) -> None:
+        """Add another capture rectangle (for a zig-zag road / separate sites)."""
+        self.patches.append((cx, cy, hw, hh))
+
+    def _patch_tiles(self, datum, cx, cy, hw, hh) -> list[tuple[int, int]]:
         lats, lons = [], []
-        for lx, ly in ((-r, -r), (r, -r), (r, r), (-r, r)):
+        for lx, ly in ((cx - hw, cy - hh), (cx + hw, cy - hh),
+                       (cx + hw, cy + hh), (cx - hw, cy + hh)):
             la, lo, _ = datum.local_to_geodetic(QVector3D(lx, ly, 0.0))
             lats.append(la)
             lons.append(lo)
         return tiles_covering(min(lats), min(lons), max(lats), max(lons), self.zoom)
+
+    def flat_tiles(self, datum) -> list[tuple[int, int]]:
+        """Union of the tiles covering every capture patch (deduped, sorted)."""
+        seen = set()
+        for (cx, cy, hw, hh) in self.patches:
+            seen.update(self._patch_tiles(datum, cx, cy, hw, hh))
+        return sorted(seen)
+
+    def visible_tiles(self, datum) -> list[tuple[int, int]]:
+        """Tiles covering a ``±radius_m`` square around the datum (used by the
+        3D terrain, which stays a local square)."""
+        return self._patch_tiles(datum, 0.0, 0.0, self.radius_m, self.radius_m)
 
     def quad_local(self, datum, x: int, y: int):
         """Tile ``(x, y)`` as two Z=0 triangles in local metres.

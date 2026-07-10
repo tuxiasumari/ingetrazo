@@ -344,6 +344,8 @@ class Viewport(QOpenGLWidget):
         self._tile_textures: dict = {}
         self._tile_quad_vao = None
         self._tile_quad_vbo = None
+        # Cached base-map tile geometry (built once per capture, not per frame).
+        self._tile_geom = None
 
         # Georef path node being hovered ``(path, index)`` — for the drag handle
         # highlight (Track G, GeoPath node editing).
@@ -751,6 +753,7 @@ class Viewport(QOpenGLWidget):
             finally:
                 self.doneCurrent()
         self._tile_textures.clear()
+        self._tile_geom = None       # capture patches / datum may have changed
         if self._tile_fetcher is not None:
             self._tile_fetcher.cancel_all()
         layer = getattr(self.scene, "tile_layer", None)
@@ -848,6 +851,28 @@ class Viewport(QOpenGLWidget):
         self._terrain_vao.release()
         self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
 
+    def _ensure_tile_geometry(self, layer, datum):
+        """Build the base-map tile quad VBO **once** for the current capture
+        patches (not per frame), returning ``[(x, y, vert_start), ...]``. The
+        capture is static, so a strip of many tiles still draws fast — each
+        frame just binds textures and draws slices; no per-tile re-allocation."""
+        key = (id(datum), tuple(layer.patches), layer.zoom, layer.source.id)
+        cache = getattr(self, "_tile_geom", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        raw = array("f")
+        runs = []
+        for (x, y) in layer.flat_tiles(datum):
+            start = len(raw) // 5
+            for pos, (u, v) in layer.quad_local(datum, x, y):
+                raw.extend([pos.x(), pos.y(), pos.z(), u, v])
+            runs.append((x, y, start))
+        self._tile_quad_vbo.bind()
+        self._tile_quad_vbo.allocate(raw.tobytes(), len(raw) * 4 or 4)
+        self._tile_quad_vbo.release()
+        self._tile_geom = (key, runs)
+        return runs
+
     def _render_tiles(self) -> None:
         if self._terrain_showing():
             return  # the 3D terrain replaces the flat map
@@ -856,25 +881,20 @@ class Viewport(QOpenGLWidget):
         if layer is None or datum is None or not getattr(layer, "visible", False):
             return
         try:
-            tiles = layer.visible_tiles(datum)
+            runs = self._ensure_tile_geometry(layer, datum)
         except Exception:
+            return
+        if not runs:
             return
         self._program.setUniformValue(self._loc_use_tex, 1)
         self._gl.glDepthMask(GL_FALSE)
         self._tile_quad_vao.bind()
-        for (x, y) in tiles:
+        for (x, y, start) in runs:
             tex = self._tile_texture(layer, x, y)
             if tex is None:
                 continue
-            raw = array("f")
-            for pos, (u, v) in layer.quad_local(datum, x, y):
-                raw.extend([pos.x(), pos.y(), pos.z(), u, v])
-            data = raw.tobytes()
-            self._tile_quad_vbo.bind()
-            self._tile_quad_vbo.allocate(data, len(data))
-            self._tile_quad_vbo.release()
             tex.bind(0)
-            self._gl.glDrawArrays(GL_TRIANGLES, 0, 6)
+            self._gl.glDrawArrays(GL_TRIANGLES, start, 6)
             tex.release(0)
         self._tile_quad_vao.release()
         self._gl.glDepthMask(GL_TRUE)

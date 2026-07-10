@@ -176,6 +176,39 @@ def test_layer_north_edge_maps_to_higher_y():
     assert min(p.y() for p in north) > max(p.y() for p in south)
 
 
+# ---- Capture patches (multi-region base map) -----------------------------------
+
+def test_default_patch_matches_radius_square():
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=16, radius_m=1000)
+    assert set(layer.flat_tiles(datum)) == set(layer.visible_tiles(datum))
+
+
+def test_strip_covers_far_fewer_tiles_than_square():
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=15)
+    # A 500 m × 20 km strip vs a 20 km × 20 km square at the same zoom.
+    layer.set_rectangle(width_m=500, length_m=20000)
+    strip = layer.flat_tiles(datum)
+    layer.set_rectangle(width_m=20000, length_m=20000)
+    square = layer.flat_tiles(datum)
+    assert len(strip) < len(square) / 5      # the strip is a small fraction
+    assert len(strip) < 60                     # bounded — a road stays cheap
+
+
+def test_multiple_patches_union_and_dedup():
+    datum = SceneDatum(-12.0464, -77.0428)
+    layer = TileLayer(PRESETS["esri_imagery"], zoom=15)
+    layer.set_rectangle(width_m=600, length_m=600, cx=0, cy=0)
+    one = set(layer.flat_tiles(datum))
+    layer.add_patch(5000, 5000, 300, 300)     # a second site 5 km away
+    two = set(layer.flat_tiles(datum))
+    assert two > one                            # grew
+    # Overlapping patch adds nothing new (dedup).
+    layer.add_patch(0, 0, 300, 300)
+    assert set(layer.flat_tiles(datum)) == two
+
+
 def test_cache_lru_eviction(tmp_path):
     cache = TileCache(tmp_path, max_bytes=30)
     for i in range(10):
