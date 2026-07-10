@@ -190,8 +190,9 @@ class Viewport(QOpenGLWidget):
     # rebuild its mosaic as imagery arrives.
     tilesChanged = Signal()
 
-    # Warm cream (SketchUp-ish) painted on faces with no material colour.
-    DEFAULT_FACE_COLOR = (0.92, 0.89, 0.81)
+    # Soft warm white painted on faces with no material colour — like the matte
+    # cardstock of an architecture model (SketchUp's near-white default).
+    DEFAULT_FACE_COLOR = (0.96, 0.95, 0.925)
 
     # Tooltip text shown next to the snap marker, SketchUp-style. English source
     # strings; translated at draw time via ``tr`` (see i18n/es.json).
@@ -1263,7 +1264,7 @@ class Viewport(QOpenGLWidget):
 
         self._gl.glEnable(GL_POLYGON_OFFSET_FILL)
         self._gl.glPolygonOffset(1.0, 1.0)
-        self._set_color(0.92, 0.89, 0.81, 1.0)  # warm cream, same as real faces
+        self._set_color(*self.DEFAULT_FACE_COLOR, 1.0)  # same as real faces
         self._preview_faces_vao.bind()
         self._gl.glDrawArrays(GL_TRIANGLES, 0, len(data) // 3)
         self._preview_faces_vao.release()

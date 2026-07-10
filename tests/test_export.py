@@ -134,7 +134,7 @@ def test_obj_colours_become_materials(tmp_path):
 
     mtl = (path.with_suffix(".mtl")).read_text()
     assert "Kd 0.9000 0.1000 0.1000" in mtl     # the painted colour
-    assert "Kd 0.9200 0.8900 0.8100" in mtl     # the default cream
+    assert "Kd 0.9600 0.9500 0.9250" in mtl     # the default paper white
 
     _verts, faces = _read_obj(path)
     used = {mat for mat, _ in faces}

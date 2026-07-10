@@ -14,7 +14,7 @@ from pathlib import Path
 from PySide6.QtGui import QVector3D
 
 # Cream painted on faces with no material colour (mirrors the viewport default).
-_DEFAULT_COLOR = (0.92, 0.89, 0.81)
+_DEFAULT_COLOR = (0.96, 0.95, 0.925)
 
 
 def _faces(scene):

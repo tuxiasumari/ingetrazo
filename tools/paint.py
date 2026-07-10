@@ -28,7 +28,7 @@ from tools.base import Tool, ToolContext
 
 # The default cream the viewport paints unpainted faces with — sampling an
 # unpainted face yields this, and it is what "no colour" reads as.
-DEFAULT_FACE_COLOR = (0.92, 0.89, 0.81)
+DEFAULT_FACE_COLOR = (0.96, 0.95, 0.925)
 
 
 class PaintTool(Tool):
