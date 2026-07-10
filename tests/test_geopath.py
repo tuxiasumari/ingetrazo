@@ -115,3 +115,38 @@ def test_clear_resets_geo_paths():
     scene.geo_paths.append(GeoPath([V(0, 0), V(1, 0)]))
     scene.clear()
     assert scene.geo_paths == []
+
+
+# ---- Convert to geometry (the bridge into the modelling engine) -----------------
+
+def _convert(scene, hist, path):
+    from core.edits import build_add_edges
+    from core.history import CompoundCommand
+    segs = [(a, b) for a, b in path.segments()]
+    hist.execute(CompoundCommand(
+        [build_add_edges(scene, segs, detect_faces=True),
+         DeleteGeoPathsCommand([path])]))
+
+
+def test_convert_open_path_to_edges():
+    scene = Scene()
+    hist = History(scene)
+    p = GeoPath([V(0, 0), V(10, 0), V(10, 10)])
+    scene.geo_paths.append(p)
+    _convert(scene, hist, p)
+    assert len(scene.mesh.edges) == 2
+    assert len(scene.mesh.faces) == 0
+    assert scene.geo_paths == []
+    hist.undo()
+    assert len(scene.mesh.edges) == 0
+    assert scene.geo_paths == [p]
+
+
+def test_convert_closed_path_makes_face():
+    scene = Scene()
+    hist = History(scene)
+    p = GeoPath([V(0, 0), V(10, 0), V(10, 10), V(0, 10)], closed=True)
+    scene.geo_paths.append(p)
+    _convert(scene, hist, p)
+    assert len(scene.mesh.faces) == 1     # a traced lot → a face to push/pull
+    assert scene.geo_paths == []

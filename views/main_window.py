@@ -212,6 +212,10 @@ class MainWindow(QMainWindow):
         explode_action.triggered.connect(self._on_explode_group)
         edit_menu.addAction(explode_action)
 
+        convert_path_action = QAction(tr("Convert Path to Geometry"), self)
+        convert_path_action.triggered.connect(self._on_convert_geopath)
+        edit_menu.addAction(convert_path_action)
+
         edit_menu.addSeparator()
 
         heal_action = QAction(tr("Heal Overlapping Faces"), self)
@@ -478,6 +482,34 @@ class MainWindow(QMainWindow):
             self.viewport.history.execute(ExplodeGroupCommand(g))
         if groups:
             self.viewport.update()
+
+    def _on_convert_geopath(self) -> None:
+        """Bake selected georef paths into real mesh geometry (Track G bridge).
+
+        The trace crosses from the georef subsystem into the modelling engine
+        *on demand*: each segment becomes a welded edge (a closed path auto-faces,
+        so a traced footprint is ready to push/pull into a building), and the
+        GeoPath is consumed. One undoable step.
+        """
+        from georef.geopath import GeoPath
+        from core.edits import build_add_edges
+        from core.history import CompoundCommand, DeleteGeoPathsCommand
+
+        scene = self.viewport.scene
+        paths = [p for p in scene.selection if isinstance(p, GeoPath)]
+        if not paths:
+            self.statusBar().showMessage(
+                tr("Select a path to convert to geometry."), 3000)
+            return
+        cmds = []
+        for path in paths:
+            segs = [(a, b) for a, b in path.segments()]
+            if segs:
+                cmds.append(build_add_edges(scene, segs, detect_faces=True))
+        cmds.append(DeleteGeoPathsCommand(paths))
+        cmd = cmds[0] if len(cmds) == 1 else CompoundCommand(cmds)
+        self.viewport.history.execute(cmd)
+        self.viewport.update()
 
     def _on_heal_overlaps(self) -> None:
         cmd = HealOverlapsCommand()
