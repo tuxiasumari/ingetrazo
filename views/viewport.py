@@ -102,22 +102,26 @@ SHADER_DIR = Path(__file__).resolve().parents[1] / "resources" / "shaders"
 
 # ---- Geometry helpers ------------------------------------------------------
 
-def _grid_vertices(half_size: int = 50, step: float = 1.0) -> array:
+def _axes_vertices(pos_len: float = 1.0e5):
+    """SketchUp-style axes: a long solid line in the positive direction and a
+    dashed line in the negative. The dashes grow geometrically so ~40 of them
+    reach effectively infinity (denser near the origin, sparser far — reads like
+    a line receding to the horizon). Returns ``(coords, spans)`` where ``spans``
+    maps ``'x'|'y'|'z'`` → ``(first_vertex, vertex_count)`` for a per-axis draw."""
+    dirs = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
     coords = array("f")
-    extent = half_size * step
-    for i in range(-half_size, half_size + 1):
-        c = i * step
-        coords.extend([c, -extent, 0.0,  c, extent, 0.0])    # parallel to Y
-        coords.extend([-extent, c, 0.0,  extent, c, 0.0])    # parallel to X
-    return coords
-
-
-def _axes_vertices(length: float = 10.0) -> array:
-    return array("f", [
-        0.0, 0.0, 0.0,  length, 0.0, 0.0,
-        0.0, 0.0, 0.0,  0.0, length, 0.0,
-        0.0, 0.0, 0.0,  0.0, 0.0, length,
-    ])
+    spans: dict[str, tuple[int, int]] = {}
+    for name, (dx, dy, dz) in dirs.items():
+        start = len(coords) // 3
+        coords.extend([0.0, 0.0, 0.0, dx * pos_len, dy * pos_len, dz * pos_len])
+        base, growth = 0.3, 1.35
+        for k in range(40):
+            s = base * (growth ** k)
+            e = s * 1.5
+            coords.extend([-dx * s, -dy * s, -dz * s,
+                           -dx * e, -dy * e, -dz * e])
+        spans[name] = (start, len(coords) // 3 - start)
+    return coords, spans
 
 
 def _ray_triangle(
@@ -262,9 +266,6 @@ class Viewport(QOpenGLWidget):
         self._loc_color = -1
         self._loc_pos = -1
 
-        self._grid_vao = None
-        self._grid_vbo = None
-        self._grid_count = 0
         self._axes_vao = None
         self._axes_vbo = None
 
@@ -385,10 +386,8 @@ class Viewport(QOpenGLWidget):
         self._loc_use_tex = self._program.uniformLocation("u_use_texture")
         self._loc_tex = self._program.uniformLocation("u_tex")
 
-        self._grid_vao, self._grid_vbo, self._grid_count = self._upload_static(
-            _grid_vertices()
-        )
-        self._axes_vao, self._axes_vbo, _ = self._upload_static(_axes_vertices())
+        _axes_coords, self._axes_spans = _axes_vertices()
+        self._axes_vao, self._axes_vbo, _ = self._upload_static(_axes_coords)
 
         self._sky_vao, self._sky_vbo = self._create_dynamic()
         self._edges_vao, self._edges_vbo = self._create_dynamic()
@@ -481,20 +480,7 @@ class Viewport(QOpenGLWidget):
         # replaces the flat map when enabled.
         self._render_terrain()
 
-        # Grid — depth-tested (so geometry hides it) but depth-write OFF, so
-        # grid lines don't pollute the depth buffer at z=0 and accidentally
-        # cull the bottom face of a freshly extruded box where they overlap.
-        # Hidden while the base map / terrain is showing: the modelling grid is a
-        # fixed 100 m square meant for object-scale work, so at km-scale map views
-        # it collapses into a noisy dense patch. Over terrain the map *is* the
-        # ground reference (like Google Earth / SketchUp geo-location).
-        if not self._base_map_showing() and not self._terrain_showing():
-            self._gl.glDepthMask(GL_FALSE)
-            self._set_color(0.78, 0.80, 0.84, 1.0)
-            self._grid_vao.bind()
-            self._gl.glDrawArrays(GL_LINES, 0, self._grid_count)
-            self._grid_vao.release()
-            self._gl.glDepthMask(GL_TRUE)
+        # No grid — the infinite axes are the spatial reference (SketchUp).
 
         # Persistent edges + faces
         self._sync_edges()
@@ -559,17 +545,19 @@ class Viewport(QOpenGLWidget):
         # band below.
         self._draw_preview_faces()
 
-        # Axes — drawn BEFORE user edges so any edge the user happens to draw
-        # along an axis (or coincident with one) wins the GL_LEQUAL depth
-        # test and shows on top of the axis colour. Rubber-band stays on top
-        # of both because it's drawn last with depth test off.
+        # Axes — long solid positive + dashed negative per axis (SketchUp).
+        # Depth-write OFF so the ground axes don't cull geometry sitting on z=0;
+        # drawn BEFORE user edges so an edge along an axis wins the LEQUAL depth
+        # test and shows on top. Rubber-band stays on top (drawn last, no depth).
         self._axes_vao.bind()
-        self._set_color(0.86, 0.22, 0.27, 1.0)  # X red
-        self._gl.glDrawArrays(GL_LINES, 0, 2)
-        self._set_color(0.16, 0.62, 0.36, 1.0)  # Y green
-        self._gl.glDrawArrays(GL_LINES, 2, 2)
-        self._set_color(0.20, 0.40, 0.78, 1.0)  # Z blue
-        self._gl.glDrawArrays(GL_LINES, 4, 2)
+        self._gl.glDepthMask(GL_FALSE)
+        for name, rgb in (("x", (0.86, 0.22, 0.27)),   # red
+                          ("y", (0.16, 0.62, 0.36)),   # green
+                          ("z", (0.20, 0.40, 0.78))):  # blue
+            start, count = self._axes_spans[name]
+            self._set_color(*rgb, 1.0)
+            self._gl.glDrawArrays(GL_LINES, start, count)
+        self._gl.glDepthMask(GL_TRUE)
         self._axes_vao.release()
 
         if self._edges_count > 0:
@@ -941,6 +929,14 @@ class Viewport(QOpenGLWidget):
             quad(hy, 1.0, self._SKY_RGB)
         if hy > -1.0:
             quad(-1.0, hy, self._GROUND_RGB)
+        # A subtle horizon line where sky meets ground (SketchUp).
+        if -1.0 < hy < 1.0:
+            line = array("f", [-1.0, hy, 0.0, 1.0, hy, 0.0])
+            self._sky_vbo.bind()
+            self._sky_vbo.allocate(line.tobytes(), len(line) * 4)
+            self._sky_vbo.release()
+            self._set_color(0.62, 0.64, 0.66, 1.0)
+            self._gl.glDrawArrays(GL_LINES, 0, 2)
         self._sky_vao.release()
         self._gl.glEnable(GL_DEPTH_TEST)
         self._gl.glDepthMask(GL_TRUE)
