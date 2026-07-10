@@ -135,10 +135,10 @@ class MainWindow(QMainWindow):
         toolbar.setFloatable(True)
         toolbar.setAllowedAreas(Qt.AllToolBarAreas)
         from PySide6.QtCore import QSize
-        toolbar.setIconSize(QSize(22, 22))
-        # Icon above a short label — compact and readable; also stays tidy when
-        # the toolbar is docked vertically on a side.
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        toolbar.setIconSize(QSize(24, 24))
+        # Icons only (SketchUp-style) — stays compact when docked vertically on a
+        # side; the name + shortcut live in each button's tooltip.
+        toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.toolbar = toolbar
         self.addToolBar(Qt.TopToolBarArea, toolbar)
 
@@ -160,12 +160,14 @@ class MainWindow(QMainWindow):
             for key in keys:
                 tool = self._tools[key]
                 name = tr(tool.name)
-                action = QAction(name, self)      # short label under the icon
+                action = QAction(name, self)
                 action.setIcon(tool_icon(key))
                 action.setCheckable(True)
                 if tool.shortcut:
                     action.setShortcut(QKeySequence(tool.shortcut))
-                    action.setToolTip(f"{name} ({tool.shortcut})")
+                    action.setToolTip(f"{name}  ({tool.shortcut})")
+                else:
+                    action.setToolTip(name)
                 action.triggered.connect(
                     lambda _checked, k=key: self._activate_tool(k))
                 self._tool_group.addAction(action)
