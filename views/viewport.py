@@ -730,10 +730,10 @@ class Viewport(QOpenGLWidget):
         return self._tile_fetcher
 
     def _on_tile_ready(self, source_id, x, y, z, image) -> None:
-        """A downloaded tile arrived: stash its image (at whatever zoom — the
-        view-driven map streams multiple zooms) and schedule a repaint."""
+        """A downloaded tile arrived: stash its image and schedule a repaint."""
         layer = getattr(self.scene, "tile_layer", None)
-        if layer is not None and layer.source.id == source_id:
+        if (layer is not None and layer.source.id == source_id
+                and z == layer.zoom):
             layer.images[(x, y, z)] = image
             self.tilesChanged.emit()
             self.update()
@@ -758,38 +758,26 @@ class Viewport(QOpenGLWidget):
             layer.images.clear()
         self.update()
 
-    _TILE_TEX_CAP = 320          # GL textures kept (view-driven map streams many)
-    _IMG_CACHE_CAP = 700         # decoded QImages kept in memory
-
-    def _tile_texture(self, source, x, y, z):
-        """GL texture for tile ``(x, y, z)``, or ``None`` if not yet available
-        (a download is kicked off and the frame repaints on arrival). LRU: the
-        least-recently-used texture is evicted once the cap is exceeded — needed
-        because the view-driven map streams tiles across zooms as you pan."""
-        cache = self._tile_textures
-        key = (source.id, x, y, z)
-        tex = cache.pop(key, None)
-        if tex is not None:
-            cache[key] = tex        # mark most-recently-used
-            return tex
-        layer = getattr(self.scene, "tile_layer", None)
-        img = layer.images.get((x, y, z)) if layer is not None else None
+    def _tile_texture(self, layer, x, y):
+        """GL texture for tile ``(x, y)`` of ``layer``, or ``None`` if not yet
+        available (a download is kicked off and the frame repaints on arrival)."""
+        z = layer.zoom
+        key = (layer.source.id, x, y, z)
+        if key in self._tile_textures:
+            return self._tile_textures[key]
+        img = layer.images.get((x, y, z))
         if img is None:
-            img = self._ensure_tile_fetcher().request(source, x, y, z)
+            # Cache hit returns the image synchronously; a miss returns None and
+            # starts an async download (see _on_tile_ready).
+            img = self._ensure_tile_fetcher().request(layer.source, x, y, z)
             if img is None:
                 return None
-            if layer is not None:
-                layer.images[(x, y, z)] = img
-        tex = QOpenGLTexture(img)   # QImage is top-down; our UVs map north→v=0
+            layer.images[(x, y, z)] = img
+        tex = QOpenGLTexture(img)  # QImage is top-down; our UVs map north→v=0
         tex.setWrapMode(QOpenGLTexture.ClampToEdge)
         tex.setMinificationFilter(QOpenGLTexture.LinearMipMapLinear)
         tex.setMagnificationFilter(QOpenGLTexture.Linear)
-        cache[key] = tex
-        while len(cache) > self._TILE_TEX_CAP:
-            old_key = next(iter(cache))
-            old_tex = cache.pop(old_key)
-            if old_tex is not None:
-                old_tex.destroy()
+        self._tile_textures[key] = tex
         return tex
 
     def _terrain_showing(self) -> bool:
@@ -860,62 +848,6 @@ class Viewport(QOpenGLWidget):
         self._terrain_vao.release()
         self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
 
-    def _ground_at_pixel(self, x: float, y: float):
-        """World point where the pixel's camera ray meets the Z=0 ground, or
-        ``None`` if it looks above the horizon / behind the camera."""
-        origin, direction = self._pixel_to_ray(x, y)
-        if origin is None or abs(direction.z()) < 1e-6:
-            return None
-        t = -origin.z() / direction.z()
-        if t <= 0:
-            return None
-        return origin + direction * t
-
-    # View-driven map: how far a horizon view may reach, and the per-frame tile
-    # budget (zoom drops until the visible set fits — bounds work + memory).
-    _VIEW_MAX_HALF_M = 200_000.0
-    _VIEW_TILE_BUDGET = 240
-
-    def _view_tiles(self, datum):
-        """The tiles + LOD zoom covering what the camera currently sees, or
-        ``None`` — the heart of the view-driven (streaming) base map."""
-        from georef.tiles import tiles_covering, zoom_for_mpp
-        w, h = self.width(), self.height()
-        center = self._ground_at_pixel(w / 2.0, h / 2.0)
-        if center is None:
-            return None
-        pts = []
-        for sy in (1.0, h / 2.0, h - 1.0):
-            for sx in (1.0, w / 2.0, w - 1.0):
-                g = self._ground_at_pixel(sx, sy)
-                if g is not None:
-                    pts.append(g)
-        if not pts:
-            return None
-        cap = self._VIEW_MAX_HALF_M
-        minx = max(min(p.x() for p in pts), center.x() - cap)
-        maxx = min(max(p.x() for p in pts), center.x() + cap)
-        miny = max(min(p.y() for p in pts), center.y() - cap)
-        maxy = min(max(p.y() for p in pts), center.y() + cap)
-        # Ground resolution (m/px) at screen centre → LOD zoom.
-        c1 = self._ground_at_pixel(w / 2.0 + 1.0, h / 2.0)
-        mpp = (c1 - center).length() if c1 is not None else 1.0
-        clat, _, _ = datum.local_to_geodetic(center)
-        max_zoom = getattr(self.scene.tile_layer.source, "max_zoom", 19)
-        zoom = zoom_for_mpp(mpp, clat, max_zoom=max_zoom)
-
-        def ll(x, y):
-            la, lo, _ = datum.local_to_geodetic(QVector3D(x, y, 0.0))
-            return la, lo
-        (s_lat, w_lon), (n_lat, e_lon) = ll(minx, miny), ll(maxx, maxy)
-        tiles = tiles_covering(min(s_lat, n_lat), min(w_lon, e_lon),
-                               max(s_lat, n_lat), max(w_lon, e_lon), zoom)
-        while len(tiles) > self._VIEW_TILE_BUDGET and zoom > 1:
-            zoom -= 1
-            tiles = tiles_covering(min(s_lat, n_lat), min(w_lon, e_lon),
-                                   max(s_lat, n_lat), max(w_lon, e_lon), zoom)
-        return zoom, tiles
-
     def _render_tiles(self) -> None:
         if self._terrain_showing():
             return  # the 3D terrain replaces the flat map
@@ -924,21 +856,18 @@ class Viewport(QOpenGLWidget):
         if layer is None or datum is None or not getattr(layer, "visible", False):
             return
         try:
-            view = self._view_tiles(datum)
+            tiles = layer.visible_tiles(datum)
         except Exception:
             return
-        if view is None:
-            return
-        zoom, tiles = view
         self._program.setUniformValue(self._loc_use_tex, 1)
         self._gl.glDepthMask(GL_FALSE)
         self._tile_quad_vao.bind()
         for (x, y) in tiles:
-            tex = self._tile_texture(layer.source, x, y, zoom)
+            tex = self._tile_texture(layer, x, y)
             if tex is None:
                 continue
             raw = array("f")
-            for pos, (u, v) in layer.quad_local(datum, x, y, zoom):
+            for pos, (u, v) in layer.quad_local(datum, x, y):
                 raw.extend([pos.x(), pos.y(), pos.z(), u, v])
             data = raw.tobytes()
             self._tile_quad_vbo.bind()
@@ -950,11 +879,6 @@ class Viewport(QOpenGLWidget):
         self._tile_quad_vao.release()
         self._gl.glDepthMask(GL_TRUE)
         self._program.setUniformValue(self._loc_use_tex, 0)
-        # Bound the in-memory image cache (textures have their own LRU).
-        imgs = layer.images
-        if len(imgs) > self._IMG_CACHE_CAP:
-            for k in list(imgs)[:len(imgs) - self._IMG_CACHE_CAP]:
-                imgs.pop(k, None)
 
     # ---- Dynamic uploads ----------------------------------------------------
     def notify_scene_changed(self) -> None:

@@ -61,22 +61,6 @@ def tile_bbox(x: int, y: int, zoom: int) -> tuple[float, float, float, float]:
     return lat_s, lon_w, lat_n, lon_e
 
 
-# Web-Mercator ground resolution at the equator, zoom 0: earth circumference /
-# 256 px. At zoom z, latitude φ: × cos(φ) / 2**z metres per pixel.
-_EQUATOR_MPP_Z0 = 2 * math.pi * 6378137.0 / 256.0   # ≈ 156543.03 m/px
-
-
-def zoom_for_mpp(mpp: float, lat: float, min_zoom: int = 1,
-                 max_zoom: int = 19) -> int:
-    """Slippy zoom whose tile resolution best matches ``mpp`` metres/pixel at
-    ``lat`` — the level-of-detail choice for a view-driven map."""
-    if mpp <= 0:
-        return max_zoom
-    ratio = _EQUATOR_MPP_Z0 * math.cos(math.radians(lat)) / mpp
-    z = int(round(math.log2(max(ratio, 1e-9))))
-    return max(min_zoom, min(max_zoom, z))
-
-
 def tiles_covering(lat_s: float, lon_w: float, lat_n: float, lon_e: float,
                    zoom: int) -> list[tuple[int, int]]:
     """Every tile index ``(x, y)`` that overlaps the geodetic bbox at ``zoom``."""
@@ -196,17 +180,14 @@ class TileLayer:
             lons.append(lo)
         return tiles_covering(min(lats), min(lons), max(lats), max(lons), self.zoom)
 
-    def quad_local(self, datum, x: int, y: int, zoom: int | None = None):
-        """Tile ``(x, y)`` at ``zoom`` (defaults to ``self.zoom``) as two Z=0
-        triangles in local metres.
+    def quad_local(self, datum, x: int, y: int):
+        """Tile ``(x, y)`` as two Z=0 triangles in local metres.
 
         Returns a list of ``(QVector3D position, (u, v))`` pairs — 6 vertices,
         two triangles, with UVs so the tile image's north edge maps to the +Y
         (north) side of the quad.
         """
-        if zoom is None:
-            zoom = self.zoom
-        lat_s, lon_w, lat_n, lon_e = tile_bbox(x, y, zoom)
+        lat_s, lon_w, lat_n, lon_e = tile_bbox(x, y, self.zoom)
         nw = datum.geodetic_to_local(lat_n, lon_w)
         ne = datum.geodetic_to_local(lat_n, lon_e)
         se = datum.geodetic_to_local(lat_s, lon_e)

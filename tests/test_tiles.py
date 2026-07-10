@@ -15,26 +15,7 @@ from georef.tiles import (
     num2deg,
     tile_bbox,
     tiles_covering,
-    zoom_for_mpp,
 )
-
-
-def test_zoom_for_mpp_matches_slippy_resolution():
-    # Web-Mercator resolution at the equator is 156543/2**z m/px → z.
-    base = 156543.03392
-    assert zoom_for_mpp(base / 2 ** 12, 0.0, max_zoom=19) == 12
-    assert zoom_for_mpp(base / 2 ** 16, 0.0, max_zoom=19) == 16
-    assert zoom_for_mpp(0.001, 0.0, max_zoom=19) == 19     # fine → clamp max
-    assert zoom_for_mpp(1e9, 0.0, min_zoom=2) == 2          # coarse → clamp min
-
-
-def test_zoom_for_mpp_latitude_scaling():
-    base = 156543.03392
-    # At high latitude the ground resolution shrinks by cos(lat), so the same
-    # metres/pixel corresponds to a lower zoom than at the equator.
-    z_eq = zoom_for_mpp(base / 2 ** 14, 0.0)
-    z_hi = zoom_for_mpp(base / 2 ** 14, 60.0)
-    assert z_hi < z_eq
 
 
 # ---- Slippy math ---------------------------------------------------------------
