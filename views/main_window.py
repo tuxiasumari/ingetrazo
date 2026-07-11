@@ -474,6 +474,9 @@ class MainWindow(QMainWindow):
         person_sil.triggered.connect(
             lambda: self._on_insert_person_2d("person_silhouette.png"))
         components_menu.addAction(person_sil)
+        faceme_img = QAction(tr("Face-me image (PNG)…"), self)
+        faceme_img.triggered.connect(self._on_insert_faceme_image)
+        components_menu.addAction(faceme_img)
         for key, label in (("person", tr("Person 3D")),
                            ("tree", tr("Tree")),
                            ("bush", tr("Bush")),
@@ -1075,6 +1078,44 @@ class MainWindow(QMainWindow):
                                 tr("Component file missing: {p}",
                                    p="person_billboard.png"))
             return
+        self.viewport.history.execute(InsertGroupCommand(group))
+        self._activate_tool("move")
+        self.viewport.flash_status(
+            tr("Component inserted at the origin — Move (M) places it"), 4000)
+        self.viewport.update()
+
+    def _on_insert_faceme_image(self) -> None:
+        """Insert the user's own transparent PNG as a face-me billboard —
+        a cutout person, a tree photo — scaled to a chosen real height."""
+        from PySide6.QtGui import QImage
+        from PySide6.QtWidgets import QInputDialog
+        from core.group import make_billboard_group
+        from core.history import InsertGroupCommand
+        self.viewport.end_group_edit()
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, tr("Face-me image"), "",
+            tr("Images (*.png *.webp);;All files (*)"))
+        if not path_str:
+            return
+        img = QImage(path_str)
+        if img.isNull() or img.height() == 0:
+            QMessageBox.warning(self, tr("Face-me image"),
+                                tr("Could not read the image."))
+            return
+        if not img.hasAlphaChannel():
+            QMessageBox.information(
+                self, tr("Face-me image"),
+                tr("The image has no transparency — it will show as a "
+                   "solid rectangle. A PNG with transparent background "
+                   "works best."))
+        height, ok = QInputDialog.getDouble(
+            self, tr("Face-me image"), tr("Real height (m):"),
+            1.75, 0.05, 500.0, 2)
+        if not ok:
+            return
+        group = make_billboard_group(
+            path_str, height, Path(path_str).stem,
+            img.width() / img.height())
         self.viewport.history.execute(InsertGroupCommand(group))
         self._activate_tool("move")
         self.viewport.flash_status(
