@@ -2300,10 +2300,13 @@ class Viewport(QOpenGLWidget):
              [[QVector3D(v) for v in h] for h in f.holes])
             for f in faces
         ]
-        edge_data = [(QVector3D(e.a), QVector3D(e.b)) for e in edges]
+        # Keep soft/curve flags so a pasted circle stays ONE selectable curve
+        # (ids are remapped to fresh ones at paste time).
+        edge_data = [(QVector3D(e.a), QVector3D(e.b), e.soft, e.curve)
+                     for e in edges]
         pts = [p for loop, holes in face_data for p in loop]
         pts += [p for _, holes in face_data for h in holes for p in h]
-        pts += [p for a, b in edge_data for p in (a, b)]
+        pts += [p for a, b, _, _ in edge_data for p in (a, b)]
         ref = QVector3D(min(p.x() for p in pts),
                         min(p.y() for p in pts),
                         min(p.z() for p in pts))

@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from PySide6.QtGui import QVector3D
 
-from core.history import AddFaceCommand, CompoundCommand, DeleteFaceCommand
+from core.history import (
+    AddFaceCommand,
+    DeleteFaceCommand,
+    SnapshotCompound,
+)
 from core.mesh import Face
 from core.topology import offset_loop
 from tools.base import Tool, ToolContext
@@ -162,9 +166,42 @@ class OffsetTool(Tool):
             AddFaceCommand(list(outer), auto=False, holes=[list(inner)]),  # ring
             AddFaceCommand(list(inner), auto=False),                        # inner
         ]
-        viewport.history.execute(CompoundCommand(commands))
+        # The offset loop mirrors the source boundary segment-by-segment: where
+        # the source edge is part of a curve (circle/arc), the offset segment is
+        # too — tag each run with a fresh id so the offset of a circle selects
+        # as one contour (SketchUp), not 24 loose segments.
+        commands.extend(self._curve_tags(viewport.scene.mesh, off))
+        # Snapshot undo: Delete/Add compose fine forward, but the hole edges
+        # the ring creates don't reverse cleanly command-by-command (they
+        # leaked on undo). One snapshot reverses exactly.
+        viewport.history.execute(SnapshotCompound(commands))
         self._reset()
         viewport.update()
+
+    def _curve_tags(self, mesh, off: list[QVector3D]) -> list:
+        from core.history import TagCurveCommand
+
+        loop = self._loop
+        n = len(loop)
+        ids: list = []
+        for i in range(n):
+            va = mesh.vertex_at(loop[i])
+            vb = mesh.vertex_at(loop[(i + 1) % n])
+            e = mesh.find_edge(va, vb) if va is not None and vb is not None \
+                else None
+            ids.append(e.curve if e is not None else None)
+        if ids[0] is not None and all(c == ids[0] for c in ids):
+            return [TagCurveCommand(list(off), closed=True)]  # full circle
+        tags = []
+        for k in range(n):
+            if ids[k] is None or ids[(k - 1) % n] == ids[k]:
+                continue                                       # not a run start
+            pts, j = [off[k]], k
+            while ids[j] == ids[k]:
+                pts.append(off[(j + 1) % n])
+                j = (j + 1) % n
+            tags.append(TagCurveCommand(pts, closed=False))
+        return tags
 
     def _reset(self) -> None:
         self.hovered_face = None

@@ -52,8 +52,17 @@ class PasteTool(Tool):
                 holes=[[p + off for p in h] for h in holes] or None,
                 auto=False,
             ))
-        for a, b in self._clip["edges"]:
-            commands.append(AddEdgeCommand(a + off, b + off))
+        # Soft/curve flags travel with the copy; curve ids are remapped to
+        # FRESH ones so each pasted circle/arc is its own selectable contour
+        # (never entangled with the original's).
+        from core.mesh import Mesh
+        id_map: dict[int, int] = {}
+        for a, b, soft, curve in self._clip["edges"]:
+            if curve is not None and curve not in id_map:
+                id_map[curve] = Mesh.next_curve_id()
+            commands.append(AddEdgeCommand(
+                a + off, b + off, soft=soft or None,
+                curve=id_map.get(curve)))
         if not commands:
             return
         cmd = commands[0] if len(commands) == 1 else CompoundCommand(commands)
@@ -75,7 +84,7 @@ class PasteTool(Tool):
                 n = len(lp)
                 for i in range(n):
                     segments.append((lp[i] + off, lp[(i + 1) % n] + off))
-        for a, b in self._clip["edges"]:
+        for a, b, _, _ in self._clip["edges"]:
             segments.append((a + off, b + off))
         return segments
 

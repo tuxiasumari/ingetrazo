@@ -275,6 +275,66 @@ def test_square_over_circle_next_to_a_solid():
     assert sum(1 for f in ground if f.area() > 85) == 1   # no doubled square
 
 
+def test_paste_keeps_curve_identity():
+    # Copy/paste re-created edges with no soft/curve flags, silently degrading
+    # a pasted circle to 24 loose segments (per-segment selection — the
+    # circo.igz report). The clipboard must carry the flags and paste must
+    # remap curve ids to fresh ones.
+    from tools.circle import CircleTool
+    from tools.paste import PasteTool
+    from views.viewport import Viewport
+
+    scene = Scene()
+    vp = _Vp(scene)
+    vp.clipboard = None
+    t = CircleTool()
+    t.work_plane = None
+    _click(vp, t, 0, 0)
+    _click(vp, t, 3, 0)
+    arc = next(e for e in scene.mesh.edges if e.curve is not None)
+    scene.selection.update(scene.mesh.curve_edges(arc))
+    assert Viewport.copy_selection(vp)          # unbound: stub viewport
+    p = PasteTool()
+    p.on_activate(vp)
+    _click(vp, p, 10, 0)
+    ids = {e.curve for e in scene.mesh.edges if e.curve is not None}
+    assert len(ids) == 2                        # original + pasted, own ids
+    assert sum(1 for e in scene.mesh.edges if e.curve is None) == 0
+    sizes = sorted(len([e for e in scene.mesh.edges if e.curve == cid])
+                   for cid in ids)
+    assert sizes == [24, 24]
+
+
+def test_offset_of_circle_tags_ring_and_undoes_cleanly():
+    # The offset of a circle face must select as ONE contour (SketchUp), and
+    # undo must remove the ring exactly (the hole edges used to leak).
+    from tools.circle import CircleTool
+    from tools.offset import OffsetTool
+
+    scene = Scene()
+    vp = _Vp(scene)
+    t = CircleTool()
+    t.work_plane = None
+    _click(vp, t, 0, 0)
+    _click(vp, t, 3, 0)
+    edges0 = len(scene.mesh.edges)
+    disc = scene.mesh.faces[0]
+    o = OffsetTool()
+    o.base_face = disc
+    o._loop = [QVector3D(v) for v in disc.vertices]
+    o._normal = disc.normal()
+    o.distance = 1.0
+    o._commit(vp)
+    ids = {e.curve for e in scene.mesh.edges if e.curve is not None}
+    assert len(ids) == 2                        # source circle + offset ring
+    assert len(scene.mesh.faces) == 2           # ring + inner
+    vp.history.undo()
+    assert len(scene.mesh.edges) == edges0      # no leaked ring edges
+    assert len(scene.mesh.faces) == 1
+    vp.history.redo()
+    assert len(scene.mesh.faces) == 2
+
+
 def test_deleting_one_contour_leaves_the_other():
     from core.history import EraseSelectionCommand
     from core.mesh import Edge

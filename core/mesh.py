@@ -273,6 +273,15 @@ class Mesh:
                 return e
         return None
 
+    @staticmethod
+    def next_curve_id() -> int:
+        """A fresh curve id — for tools that re-create curve edges (paste,
+        offset) and must give the copy its own contour identity."""
+        global _CURVE_COUNTER
+        cid = _CURVE_COUNTER
+        _CURVE_COUNTER += 1
+        return cid
+
     def tag_curve(self, loop_points, closed: bool = True) -> int | None:
         """Mark every edge lying along the drawn ``loop_points`` path as one
         curve (a fresh id), so selecting any segment selects the whole circle/arc.
