@@ -81,8 +81,8 @@ def draw(size: int) -> QImage:
         p.drawPolygon(QPolygonF(pts))
 
     # Centre cube: white iso cube — enlarged from the original artwork's
-    # ≈0.21 R to 0.28 R so it reads at dock sizes (author's call).
-    r = 84.0 * s
+    # ≈0.21 R to 0.32 R so it reads at dock sizes (author's call).
+    r = 96.0 * s
     hexa = []
     for i in range(6):
         a = math.radians(60 * i - 90)
