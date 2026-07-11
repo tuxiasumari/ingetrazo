@@ -121,6 +121,30 @@ class _GroupScene:
         self._scene.version = value
 
 
+def _component_is_closed(mesh, face) -> bool:
+    """Whether ``face``'s edge-connected component is watertight — every edge
+    reachable from it borders at least two faces. An open sheet (a flat
+    drawing) reaches a boundary edge and reads ``False`` even when a closed
+    solid exists elsewhere in the same mesh."""
+    seen = {face}
+    stack = [face]
+    while stack:
+        f = stack.pop()
+        for lp in (f.loop, *f.hole_loops):
+            n = len(lp)
+            for i in range(n):
+                e = mesh.find_edge(lp[i], lp[(i + 1) % n])
+                if e is None:
+                    continue
+                if len(e.faces) < 2:
+                    return False
+                for g in e.faces:
+                    if g not in seen:
+                        seen.add(g)
+                        stack.append(g)
+    return True
+
+
 def _swept_by_push(neighbour: Face, push_normal: QVector3D) -> bool:
     """Whether ``neighbour`` is *swept* by a push along ``push_normal`` — it has
     an edge parallel to the push, so translating its shared edge slides the wall
@@ -763,6 +787,18 @@ class PushPullTool(Tool):
         attached_any = all(kind != "free" for kind, _ in kinds)
         attached = attached_any and not self._keep_base
         through = self._find_through_face(face, d, faces) if attached else None
+        # "Solid" must be a property of the REGION being pushed, not just the
+        # whole mesh: a flat drawing with a box standing elsewhere is 'not
+        # flat', but pushing one of the drawing's sheet regions must take the
+        # sheet path — the volumetric plane rebuild reads an open sheet's
+        # regions as phantoms and deletes the neighbours (xc.igz: pushing a
+        # circle∩square lens made the rest of the drawing disappear). A base
+        # whose rim backs onto ONLY coplanar faces and whose connected
+        # component has open edges is pure sheet; any perpendicular backing
+        # (a room raised from the plan) keeps the solid pipeline.
+        if was_solid and all(kind == "coplanar" for kind, _ in kinds) \
+                and not _component_is_closed(scene.mesh, face):
+            was_solid = False
 
         before = set(scene.mesh.faces)
         self._cap_cmd = None
