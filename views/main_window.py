@@ -249,7 +249,10 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = menubar.addMenu(tr("File"))
         for action in self._file_actions():
-            file_menu.addAction(action)
+            if isinstance(action, QMenu):
+                file_menu.addMenu(action)
+            else:
+                file_menu.addAction(action)
 
         # Edit menu
         edit_menu = menubar.addMenu(tr("Edit"))
@@ -385,6 +388,9 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(action_profile)
 
         help_menu = menubar.addMenu(tr("Help"))
+        get_models_action = QAction(tr("Get more models and textures…"), self)
+        get_models_action.triggered.connect(self._on_get_models)
+        help_menu.addAction(get_models_action)
         about_action = QAction(tr("About IngeTrazo"), self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
@@ -458,6 +464,17 @@ class MainWindow(QMainWindow):
         import_obj_action = QAction(tr("Import OBJ…"), self)
         import_obj_action.triggered.connect(self._on_import_obj)
         actions.append(import_obj_action)
+
+        components_menu = QMenu(tr("Insert component"), self)
+        for key, label in (("person", tr("Person (1.75 m scale figure)")),
+                           ("tree", tr("Tree")),
+                           ("bush", tr("Bush")),
+                           ("car", tr("Car"))):
+            act = QAction(label, self)
+            act.triggered.connect(
+                lambda _c, k=key: self._on_insert_component(k))
+            components_menu.addAction(act)
+        actions.append(components_menu)
 
         import_dae_action = QAction(tr("Import DAE…"), self)
         import_dae_action.triggered.connect(self._on_import_dae)
@@ -1015,6 +1032,46 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._saved_version = self.viewport.scene.version
         self._update_title()
+
+    def _on_insert_component(self, key: str) -> None:
+        """Insert a bundled starter component as a Group at the origin,
+        selected and ready to Move into place."""
+        from core.history import InsertGroupCommand
+        from core.group import Group
+        from core.scene import Scene as _Scene
+        from formats import obj as _obj
+        self.viewport.end_group_edit()
+        path = (Path(__file__).resolve().parent.parent / "resources"
+                / "components" / f"{key}.obj")
+        if not path.exists():
+            QMessageBox.warning(self, tr("Insert component"),
+                                tr("Component file missing: {p}", p=str(path)))
+            return
+        temp = _Scene()
+        _obj.load_obj(temp, path)
+        group = Group(temp.mesh, name=tr(key.capitalize()))
+        self.viewport.history.execute(InsertGroupCommand(group))
+        self._activate_tool("move")
+        self.viewport.flash_status(
+            tr("Component inserted at the origin — Move (M) places it"), 4000)
+        self.viewport.update()
+
+    def _on_get_models(self) -> None:
+        QMessageBox.information(
+            self, tr("Get more models and textures"),
+            tr("Free sources that open directly in IngeTrazo:") + "<br><br>"
+            "<b>3D Warehouse</b> — "
+            "<a href='https://3dwarehouse.sketchup.com'>"
+            "3dwarehouse.sketchup.com</a><br>"
+            + tr("Download as COLLADA (.dae) and use File → Import DAE.")
+            + "<br><br>"
+            "<b>Poly Haven</b> — <a href='https://polyhaven.com'>"
+            "polyhaven.com</a> " + tr("(CC0: models OBJ and PBR textures)")
+            + "<br><b>ambientCG</b> — <a href='https://ambientcg.com'>"
+            "ambientcg.com</a> " + tr("(CC0 textures — drop the PNG into "
+                                      "resources/textures)")
+            + "<br><b>Sketchfab</b> — <a href='https://sketchfab.com'>"
+            "sketchfab.com</a> " + tr("(filter by CC licence, download OBJ)"))
 
     def _on_import_dae(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(

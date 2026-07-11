@@ -1342,6 +1342,26 @@ class MakeGroupCommand(Command):
         scene.version += 1
 
 
+class InsertGroupCommand(Command):
+    """Insert a ready-made Group (a bundled component, a future collection
+    item) into the scene, selected so the user can Move it into place."""
+
+    def __init__(self, group) -> None:
+        self.group = group
+
+    def do(self, scene) -> None:
+        scene.groups.append(self.group)
+        scene.selection.clear()
+        scene.selection.add(self.group)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self.group in scene.groups:
+            scene.groups.remove(self.group)
+        scene.selection.discard(self.group)
+        scene.version += 1
+
+
 class ExplodeGroupCommand(Command):
     """Dissolve a group: merge its geometry back into the loose mesh (welding to
     whatever it touches). Snapshot undo restores the loose mesh and the group."""

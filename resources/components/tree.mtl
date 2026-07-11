@@ -1,0 +1,5 @@
+newmtl trunk
+Kd 0.4200 0.3000 0.2000
+
+newmtl leaf
+Kd 0.3000 0.5000 0.2500

@@ -83,3 +83,32 @@ def test_clear_scene_exits_the_context():
     scene.clear()
     assert scene.edit_group is None
     assert len(scene.mesh.faces) == 0
+
+
+def test_bundled_components_import_closed_and_insert_undoably():
+    # The starter components (SketchUp-style props) must import clean and
+    # insert as selectable groups with exact undo.
+    from pathlib import Path
+
+    from core.group import Group
+    from core.history import InsertGroupCommand
+    from core.orient import is_closed
+    from formats.obj import load_obj
+
+    comp_dir = Path(__file__).resolve().parent.parent / "resources" / "components"
+    scene = Scene()
+    hist = History(scene)
+    for name, must_close in (("person", True), ("tree", True),
+                             ("bush", True), ("car", False)):
+        temp = Scene()
+        load_obj(temp, comp_dir / f"{name}.obj")
+        assert temp.mesh.faces, name
+        assert is_closed(temp.mesh) == must_close, name
+        hist.execute(InsertGroupCommand(Group(temp.mesh, name=name)))
+    assert len(scene.groups) == 4
+    # scale figure is actually 1.75 m
+    person = next(g for g in scene.groups if g.name == "person")
+    zs = [v.position.z() for v in person.mesh.vertices]
+    assert abs(max(zs) - 1.75) < 1e-6 and abs(min(zs)) < 1e-6
+    assert hist.undo() and len(scene.groups) == 3
+    assert hist.redo() and len(scene.groups) == 4
