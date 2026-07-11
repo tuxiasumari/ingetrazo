@@ -63,6 +63,9 @@ def main() -> int:
         if p.exists():
             icon.addFile(str(p))
     app.setWindowIcon(icon)
+    # Wayland matches the running window to its .desktop entry (and thus the
+    # dock icon) by this name — see scripts/install_desktop.sh.
+    app.setDesktopFileName("ingetrazo")
     _init_language()
     window = MainWindow()
     window.show()

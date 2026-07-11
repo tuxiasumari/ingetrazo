@@ -1118,11 +1118,9 @@ class Tray(QDockWidget):
         self.entity_info = EntityInfoPanel(window)
         self.materials = MaterialsPanel(window)
         self.layers = LayersPanel(window)
-        self.bim = BimPanel(window)
         self.dim_style = DimensionStylePanel(window)
         self.setWidget(_scrolled([
             (tr("Entity info"), self.entity_info),
-            (tr("BIM"), self.bim),
             (tr("Layers"), self.layers),
             (tr("Materials"), self.materials),
             (tr("Dimension style"), self.dim_style),
@@ -1132,6 +1130,22 @@ class Tray(QDockWidget):
         self.entity_info.refresh()
         self.materials.refresh_in_model()
         self.layers.refresh()
+
+
+class BimTray(QDockWidget):
+    """Right-side **BIM** dock: the semantic workspace — tag geometry as IFC
+    objects and read the live takeoff (kept apart from drawing properties,
+    like the Georef workspace)."""
+
+    def __init__(self, window) -> None:
+        super().__init__(tr("BIM"), window)
+        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.setFeatures(QDockWidget.DockWidgetMovable
+                         | QDockWidget.DockWidgetFloatable)
+        self.bim = BimPanel(window)
+        self.setWidget(_scrolled([(tr("BIM tagging"), self.bim)]))
+
+    def on_scene_changed(self) -> None:
         self.bim.refresh()
 
 

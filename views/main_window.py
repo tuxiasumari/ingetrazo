@@ -56,7 +56,7 @@ from tools.paste import PasteTool
 from tools.pushpull import PushPullTool
 from tools.rectangle import RectangleTool
 from tools.select import SelectTool
-from views.tray import GeorefTray, Tray
+from views.tray import BimTray, GeorefTray, Tray
 from views.icons import tool_icon
 from views.viewport import Viewport
 
@@ -121,13 +121,18 @@ class MainWindow(QMainWindow):
         # Two role-based right-side docks (tabbed): Properties (what you're
         # working with) and Georef (the location workspace).
         self.tray = Tray(self)
+        self.bim_tray = BimTray(self)
         self.georef_tray = GeorefTray(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.tray)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.bim_tray)
         self.addDockWidget(Qt.RightDockWidgetArea, self.georef_tray)
-        self.tabifyDockWidget(self.tray, self.georef_tray)
+        self.tabifyDockWidget(self.tray, self.bim_tray)
+        self.tabifyDockWidget(self.bim_tray, self.georef_tray)
         self.tray.raise_()
         self.viewport.sceneVersionChanged.connect(
             lambda _v: self.tray.on_scene_changed())
+        self.viewport.sceneVersionChanged.connect(
+            lambda _v: self.bim_tray.on_scene_changed())
         self.viewport.sceneVersionChanged.connect(
             lambda _v: self.georef_tray.on_scene_changed())
 
