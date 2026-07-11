@@ -40,3 +40,11 @@ untitled.igz
 
 # Reference screenshots / sample documents shared during sessions
 capturas/
+
+# User debugging repro files saved at the repo root during dogfooding
+/ojo.igz
+/circo.igz
+/aas.igz
+/rect.igz
+/xc.igz
+/sigue.igz
