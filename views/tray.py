@@ -800,6 +800,145 @@ class LayersPanel(QWidget):
         self._window.viewport.update()
 
 
+
+
+class BimPanel(QWidget):
+    """BIM tagging (the thesis layer): mark the selected geometry as an IFC
+    object — class + name — and read its LIVE quantities. Freeform stays
+    freeform; a tag is metadata the takeoff (and the future IFC export)
+    consumes. Untagged geometry is just drawing."""
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLineEdit,
+                                       QPushButton, QTreeWidget, QVBoxLayout)
+        self._window = window
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 8)
+
+        row = QHBoxLayout()
+        self.class_box = QComboBox()
+        from core.bim import IFC_CLASSES
+        self.class_box.addItems(IFC_CLASSES)
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText(tr("Name (e.g. Wall axis A)"))
+        row.addWidget(self.class_box)
+        row.addWidget(self.name_edit, 1)
+        lay.addLayout(row)
+
+        btns = QHBoxLayout()
+        tag_btn = QPushButton(tr("Tag selection"))
+        tag_btn.setToolTip(tr(
+            "Mark the selected faces / group as this IFC object"))
+        tag_btn.clicked.connect(self._on_tag)
+        untag_btn = QPushButton(tr("Untag"))
+        untag_btn.clicked.connect(self._on_untag)
+        btns.addWidget(tag_btn)
+        btns.addWidget(untag_btn)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels([tr("Class"), tr("Name"),
+                                   tr("Area m²"), tr("Vol m³")])
+        self.tree.setRootIsDecorated(False)
+        self.tree.setColumnWidth(0, 82)
+        self.tree.setColumnWidth(1, 90)
+        self.tree.setColumnWidth(2, 64)
+        self.tree.itemClicked.connect(self._on_pick_object)
+        lay.addWidget(self.tree)
+
+        exp = QPushButton(tr("Export quantities CSV…"))
+        exp.setToolTip(tr(
+            "The takeoff table — the bridge to IngePresupuestos"))
+        exp.clicked.connect(self._on_export_csv)
+        lay.addWidget(exp)
+        self._objects: list = []
+        self.refresh()
+
+    def _scene(self):
+        return self._window.viewport.scene
+
+    # ---- Actions -------------------------------------------------------------
+    def _on_tag(self) -> None:
+        from core.bim import next_object_id, tag_faces, tag_group
+        scene = self._scene()
+        faces = [s for s in scene.selection if isinstance(s, Face)]
+        groups = [s for s in scene.selection if isinstance(s, Group)]
+        cls = self.class_box.currentText()
+        name = self.name_edit.text().strip()
+        tagged = 0
+        for g in groups:
+            tag_group(g, cls, name or g.name)
+            tagged += 1
+        if faces:
+            tag_faces(faces, cls, name, next_object_id(scene))
+            tagged += 1
+        if not tagged:
+            self._window.statusBar().showMessage(
+                tr("Select faces (or a group) to tag first"), 2500)
+            return
+        scene.version += 1
+        self._window.viewport.update()
+        self.refresh()
+
+    def _on_untag(self) -> None:
+        from core.bim import untag_faces, untag_group
+        scene = self._scene()
+        untag_faces(s for s in scene.selection if isinstance(s, Face))
+        for g in scene.selection:
+            if isinstance(g, Group):
+                untag_group(g)
+        scene.version += 1
+        self._window.viewport.update()
+        self.refresh()
+
+    def _on_pick_object(self, item, _col) -> None:
+        """Clicking a row selects the object's geometry in the viewport."""
+        idx = self.tree.indexOfTopLevelItem(item)
+        if not (0 <= idx < len(self._objects)):
+            return
+        obj = self._objects[idx]
+        scene = self._scene()
+        scene.selection.clear()
+        if "group" in obj:
+            scene.selection.add(obj["group"])
+        else:
+            scene.selection.update(obj["faces"])
+        scene.version += 1
+        self._window.viewport.update()
+
+    def _on_export_csv(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from core.bim import quantities_csv
+        path, _ = QFileDialog.getSaveFileName(
+            self, tr("Export quantities CSV"), "metrado.csv",
+            tr("CSV (*.csv);;All files (*)"))
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(quantities_csv(self._scene()))
+        self._window.statusBar().showMessage(
+            tr("Quantities exported to {path}", path=path), 4000)
+
+    # ---- Model → view ----------------------------------------------------------
+    def refresh(self) -> None:
+        from PySide6.QtWidgets import QTreeWidgetItem
+        from core.bim import collect_objects
+        self._objects = collect_objects(self._scene())
+        self.tree.clear()
+        for obj in self._objects:
+            vol = "—" if obj["volume"] is None else f"{obj['volume']:.2f}"
+            item = QTreeWidgetItem([
+                obj["class"].removeprefix("Ifc"),
+                obj["name"], f"{obj['area']:.2f}", vol])
+            if obj["volume"] is None:
+                item.setToolTip(3, tr(
+                    "Not watertight on its own — no volume"))
+            self.tree.addTopLevelItem(item)
+
+
 class Tray(QDockWidget):
     """Right-side **Properties** dock: what you're working with — the selection's
     info, materials, and annotation styles (context, not geo workspace)."""
@@ -813,9 +952,11 @@ class Tray(QDockWidget):
         self.entity_info = EntityInfoPanel(window)
         self.materials = MaterialsPanel(window)
         self.layers = LayersPanel(window)
+        self.bim = BimPanel(window)
         self.dim_style = DimensionStylePanel(window)
         self.setWidget(_scrolled([
             (tr("Entity info"), self.entity_info),
+            (tr("BIM"), self.bim),
             (tr("Layers"), self.layers),
             (tr("Materials"), self.materials),
             (tr("Dimension style"), self.dim_style),
@@ -825,6 +966,7 @@ class Tray(QDockWidget):
         self.entity_info.refresh()
         self.materials.refresh_in_model()
         self.layers.refresh()
+        self.bim.refresh()
 
 
 class GeorefTray(QDockWidget):

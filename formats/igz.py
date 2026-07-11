@@ -56,6 +56,9 @@ def _face_json(f) -> dict:
     layer = getattr(f, "attrs", {}).get("layer")
     if layer is not None:
         entry["layer"] = layer
+    ifc = getattr(f, "attrs", {}).get("ifc")
+    if ifc is not None:
+        entry["ifc"] = dict(ifc)
     return entry
 
 
@@ -89,6 +92,8 @@ def save_scene(scene, path: Path) -> None:
             entry = _mesh_json(g.mesh)
             if getattr(g, "layer", None) is not None:
                 entry["layer"] = g.layer
+            if getattr(g, "ifc", None):
+                entry["ifc"] = dict(g.ifc)
             payload["groups"].append(entry)
     layers = getattr(scene, "layers", None)
     if layers is not None and (len(layers) > 1 or any(
@@ -153,6 +158,8 @@ def load_into(scene, path: Path) -> None:
         _load_mesh(group.mesh, raw)
         if raw.get("layer"):
             group.layer = raw["layer"]
+        if raw.get("ifc"):
+            group.ifc = dict(raw["ifc"])
         scene.groups.append(group)
 
     for raw in payload.get("dimensions", []):
@@ -209,3 +216,5 @@ def _load_mesh(mesh, payload) -> None:
                 face.attrs["texture"] = dict(texture)
             if raw.get("layer"):
                 face.attrs["layer"] = raw["layer"]
+            if raw.get("ifc"):
+                face.attrs["ifc"] = dict(raw["ifc"])
