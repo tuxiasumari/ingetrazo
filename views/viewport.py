@@ -1960,6 +1960,20 @@ class Viewport(QOpenGLWidget):
         tool = self.active_tool
         captured = getattr(tool, "work_plane", None) if tool is not None else None
         if captured is not None:
+            # SketchUp's escape hatch: orbiting down to the horizon means "I
+            # want to draw UPWARD now". A first click on a horizontal face
+            # (the ground, a slab) captures its plane and would pin the whole
+            # chain flat forever; at near-horizon views, where the horizontal
+            # plane is unreadable anyway, a HORIZONTAL captured plane yields
+            # to the vertical plane through the start point so the line can
+            # rise in Z. Vertical captured planes (walls) already allow it.
+            start = (getattr(tool, "start_point", None)
+                     if tool is not None else None)
+            if start is not None and abs(
+                    captured[1].normalized().z()) > 0.94:
+                vertical = self._near_horizon_vertical(start)
+                if vertical is not None:
+                    return vertical
             return captured
 
         start = getattr(tool, "start_point", None) if tool is not None else None
@@ -1991,10 +2005,26 @@ class Viewport(QOpenGLWidget):
             return start, QVector3D(0.0, 0.0, 1.0)
         # |forward.z| ≈ sin(pitch). Anything tilted more than the threshold
         # keeps the horizontal plane.
-        if abs(forward.z()) >= math.sin(math.radians(self.HORIZON_PITCH_THRESHOLD_DEG)):
-            return start, QVector3D(0.0, 0.0, 1.0)
-        # Near-horizon view — pick the vertical plane whose normal is more
-        # end-on to the camera so cursor motion maps cleanly to it.
+        vertical = self._near_horizon_vertical(start)
+        if vertical is not None:
+            return vertical
+        return start, QVector3D(0.0, 0.0, 1.0)
+
+    def _near_horizon_vertical(
+        self, start: QVector3D
+    ) -> Optional[tuple[QVector3D, QVector3D]]:
+        """The vertical work plane through ``start`` when the camera sits near
+        the horizon — the only orientation where cursor→ground is ambiguous
+        and dragging up must move in Z. ``None`` at steeper tilts."""
+        forward = (self.camera.target - self.camera.eye())
+        if forward.length() < 1e-9:
+            return None
+        forward = forward.normalized()
+        if abs(forward.z()) >= math.sin(
+                math.radians(self.HORIZON_PITCH_THRESHOLD_DEG)):
+            return None
+        # Pick the vertical plane whose normal is more end-on to the camera
+        # so cursor motion maps cleanly to it.
         if abs(forward.x()) >= abs(forward.y()):
             return start, QVector3D(1.0, 0.0, 0.0)
         return start, QVector3D(0.0, 1.0, 0.0)
