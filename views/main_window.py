@@ -260,6 +260,13 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        select_all_action = QAction(tr("Select All"), self)
+        select_all_action.setShortcut(QKeySequence.SelectAll)
+        select_all_action.triggered.connect(self._on_select_all)
+        edit_menu.addAction(select_all_action)
+
+        edit_menu.addSeparator()
+
         copy_action = QAction(tr("Copy"), self)
         copy_action.setShortcut(QKeySequence.Copy)
         copy_action.triggered.connect(lambda: self.viewport.copy_selection())
@@ -882,6 +889,21 @@ class MainWindow(QMainWindow):
                 self.viewport.camera.set_view("iso")
                 self.viewport.camera.fit_to(mn, mx)
         self.viewport.update()
+
+    def _on_select_all(self) -> None:
+        """Select every entity (Ctrl+A) — edges (soft included), faces, groups
+        and dimensions. The safe way to rotate/move/scale a WHOLE model: a
+        window box-select that misses one protruding piece leaves it behind
+        and the transform warps the boundary (the sigue.igz report)."""
+        sel = self.viewport.scene.selection
+        sel.clear()
+        sel.update(self.viewport.scene.edges)
+        sel.update(self.viewport.scene.faces)
+        sel.update(self.viewport.scene.groups)
+        sel.update(getattr(self.viewport.scene, "dimensions", []))
+        self.viewport.update()
+        self.statusBar().showMessage(
+            tr("Selected everything ({n} entities)", n=len(sel)), 2500)
 
     # ---- Undo / redo --------------------------------------------------------
     def _on_undo(self) -> None:

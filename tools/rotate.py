@@ -110,13 +110,32 @@ class RotateTool(Tool):
     def rubber_band_lines(self):
         if self.start_point is None or self.hover_point is None:
             return []
-        segments = [(self.start_point, self.hover_point)]
+        # The protractor circle makes the rotation PLANE legible the moment
+        # the centre is placed — clicking a slanted face rotates about its
+        # normal, and without this cue the axis was invisible.
+        segments = list(self._protractor_segments())
+        segments.append((self.start_point, self.hover_point))
         if self.ref_point is not None:
             segments.append((self.start_point, self.ref_point))
             deg = self._angle_to(self.hover_point)
             if deg is not None:
                 segments.extend(self._arc_segments(deg))
         return segments
+
+    def _protractor_segments(self):
+        """A 24-gon circle in the rotation plane around the centre, sized to
+        the reference arm (or the cursor distance before the arm is set)."""
+        anchor = self.ref_point or self.hover_point
+        if anchor is None:
+            return []
+        r = (anchor - self.start_point).length()
+        if r < 1e-9:
+            return []
+        u, v = plane_axes(self._axis())
+        pts = [self.start_point + (u * math.cos(2 * math.pi * k / 24)
+                                   + v * math.sin(2 * math.pi * k / 24)) * r
+               for k in range(24)]
+        return [(pts[k], pts[(k + 1) % 24]) for k in range(24)]
 
     def value_label(self):
         if self.ref_point is None or self.hover_point is None:

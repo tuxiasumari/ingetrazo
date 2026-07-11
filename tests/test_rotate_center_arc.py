@@ -246,3 +246,37 @@ def test_scale_group_as_unit():
     assert (6.0, 2.0) in sorted((round(v.position.x(), 3),
                                  round(v.position.y(), 3))
                                 for v in group.mesh.vertices)
+
+
+def test_select_all_then_rotate_whole_model_is_rigid():
+    # Rotating a whole model must be rigid. A window box-select that misses a
+    # protruding piece leaves it behind and the boundary warps (sigue.igz
+    # report) — Select All (Ctrl+A) covers every vertex, so nothing folds.
+    from core.history import RotateVerticesCommand
+    from core.topology import _key
+
+    scene = Scene()
+    vp = _Vp(scene)
+    _rect(scene, vp.history, 0, 0, 4, 4)
+    _rect(scene, vp.history, 6, 0, 9, 2)           # second separate slab
+    # Select All semantics: every edge + face
+    scene.selection.clear()
+    scene.selection.update(scene.mesh.edges)
+    scene.selection.update(scene.mesh.faces)
+    positions = []
+    seen = set()
+    for ent in scene.selection:
+        pts = ([ent.a, ent.b] if hasattr(ent, "a") else list(ent.vertices))
+        for p in pts:
+            k = _key(p)
+            if k not in seen:
+                seen.add(k)
+                positions.append(QVector3D(p))
+    f0 = len(scene.mesh.faces)
+    vp.history.execute(RotateVerticesCommand(
+        positions, QVector3D(0, 0, 0), QVector3D(0, 0, 1), 37.0))
+    assert len(scene.mesh.faces) == f0             # rigid: nothing folded
+    # distances preserved (rigidity spot check)
+    d = min((v.position - QVector3D(0, 0, 0)).length()
+            for v in scene.mesh.vertices)
+    assert d < 1e-5                                # corner stayed on centre
