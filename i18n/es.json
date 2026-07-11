@@ -156,6 +156,7 @@
   "Properties panel": "Panel de propiedades",
   "Push / Pull": "Empujar / Tirar",
   "Push refused: would break the solid (left it unchanged)": "Empuje rechazado: rompería el sólido (sin cambios)",
+  "Push stopped at {d:.2f} m: going further would break the solid": "Push detenido en {d:.2f} m: seguir rompería el sólido",
   "Quit": "Salir",
   "Quit IngeTrazo?": "¿Salir de IngeTrazo?",
   "Radius": "Radio",

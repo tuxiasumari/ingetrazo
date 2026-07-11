@@ -114,6 +114,51 @@ def test_ring_push_refusal_is_failsafe_and_announced():
     assert any("refused" in m.lower() for m in vp.messages)  # user is told
 
 
+def test_refused_drag_tops_out_at_last_good_height():
+    # The pure eye model: three concentric circles ONLY (the whole disc, so
+    # the first push leaves a closed mesh and the guard is armed). Dragging
+    # the iris (middle annulus) up to the EXACT level of the already-raised
+    # outer ring is digested by the rebuild and refused by the guard. The
+    # drag preview must not read as 'the solid vanished': it sticks at the
+    # last distance that worked and the commit lands there.
+    from tools.circle import CircleTool
+
+    scene = Scene()
+    vp = _Vp(scene)
+    for r in (5, 3, 1.5):
+        t = CircleTool()
+        t.work_plane = None
+        for x in (0, r):
+            t.on_click(ToolContext(viewport=vp, world=QVector3D(x, 0, 0),
+                                   screen=QPointF(0, 0),
+                                   modifiers=Qt.NoModifier, snap=None))
+
+    def face_by_area(area):
+        return next(f for f in scene.mesh.faces
+                    if abs(f.area() - area) < 0.6
+                    and all(abs(v.position.z()) < 1e-6 for v in f.loop))
+
+    _push(vp, face_by_area(77.6), 2.0)             # outer ring up 2
+    vp.messages.clear()
+    iris = face_by_area(28.0)
+    pp = PushPullTool()
+    pp.hovered_face = iris
+    pp._hover_group = None
+    pp.on_click(ToolContext(viewport=vp, world=QVector3D(0, 0, 0),
+                            screen=QPointF(500, 350),
+                            modifiers=Qt.NoModifier, snap=None))
+    for d in (1.5, 1.9, 2.0, 2.4):                 # drag across the flush level
+        pp.extrusion = d
+        pp._apply_preview(vp)
+    assert pp.extrusion == 1.9                     # topped out, not vanished
+    cap = [f for f in scene.mesh.faces
+           if all(abs(v.position.z() - 1.9) < 1e-6 for v in f.loop)]
+    assert cap                                     # the forming solid is shown
+    assert any("stopped" in m.lower() for m in vp.messages)
+    pp._commit(vp)
+    assert is_closed(scene.mesh)
+
+
 def test_add_face_drops_nested_holes():
     """A hole inside another hole of the same face is geometric nonsense: it
     corrupts earcut (phantom wedge triangles across the opening — the 'eye'

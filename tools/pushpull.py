@@ -207,6 +207,7 @@ class PushPullTool(Tool):
         # vertices) rather than a strip-by-strip extrude.
         self._prism_cap: bool = False
         self._drag_pre_oriented: bool = False
+        self._last_good_extrusion: float | None = None
         self._anchor: QVector3D | None = None  # fixed centroid for measuring extrusion
         self._normal: QVector3D | None = None
         self._cap_positions: list[QVector3D] = []  # original cap vertices
@@ -290,6 +291,7 @@ class PushPullTool(Tool):
             self._cap_positions = self._cap_loop_positions(face)
             self._compute_inward_limit(target)
             self._preview_snapshot = None
+            self._last_good_extrusion = None
             # The live preview takes over from the hover shade now.
             viewport.set_hover(None)
             viewport.update()
@@ -376,13 +378,31 @@ class PushPullTool(Tool):
 
     def _apply_preview(self, viewport) -> None:
         """Show the forming solid by applying the real commit to the mesh, after
-        reverting the previous frame's preview."""
+        reverting the previous frame's preview.
+
+        When the distance under the cursor is REFUSED by the guard (a flush
+        landing the rebuild digests — e.g. an annulus pushed level with an
+        already-raised neighbour), the drag must not read as 'the solid
+        vanished': the preview sticks at the last distance that worked and the
+        drag tops out there, SketchUp-clamp style. The commit then lands at
+        that reachable height too (self.extrusion is pinned back)."""
         self._revert_preview(viewport)
         if self.base_face is None or abs(self.extrusion) < _MIN_EXTRUDE:
             viewport.update()
             return
         self._preview_snapshot = self._target_mesh(viewport.scene).capture_state()
         self._mutate(viewport.scene, preview=True)
+        if self._refused:
+            # _mutate already restored the mesh to the pre-op state.
+            if self._last_good_extrusion is not None:
+                self.extrusion = self._last_good_extrusion
+                self._mutate(viewport.scene, preview=True)
+                if not self._refused:
+                    viewport.flash_status(tr(
+                        "Push stopped at {d:.2f} m: going further would "
+                        "break the solid", d=abs(self.extrusion)), 1500)
+        else:
+            self._last_good_extrusion = self.extrusion
         viewport.scene.version += 1
         viewport.update()
 
@@ -1065,6 +1085,7 @@ class PushPullTool(Tool):
         self._normal = None
         self._cap_positions = []
         self._preview_snapshot = None
+        self._last_good_extrusion = None
         self._drag_pre_oriented = False
         self._inference_point = None
         self._inference_kind = None
