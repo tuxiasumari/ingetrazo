@@ -1,0 +1,181 @@
+{
+ "categories": [
+  {
+   "id": "brick",
+   "items": [
+    {
+     "file": "brick/brick_red.png",
+     "name": "brick_red",
+     "sw": 1.0,
+     "sh": 0.6
+    },
+    {
+     "file": "brick/brick_clay.png",
+     "name": "brick_clay",
+     "sw": 1.0,
+     "sh": 0.6
+    },
+    {
+     "file": "brick/brick_gray.png",
+     "name": "brick_gray",
+     "sw": 1.0,
+     "sh": 0.6
+    }
+   ]
+  },
+  {
+   "id": "concrete",
+   "items": [
+    {
+     "file": "concrete/concrete_smooth.png",
+     "name": "concrete_smooth",
+     "sw": 1.5,
+     "sh": 1.5
+    },
+    {
+     "file": "concrete/concrete_exposed.png",
+     "name": "concrete_exposed",
+     "sw": 1.2,
+     "sh": 1.2
+    },
+    {
+     "file": "concrete/concrete_blocks.png",
+     "name": "concrete_blocks",
+     "sw": 0.8,
+     "sh": 0.8
+    }
+   ]
+  },
+  {
+   "id": "stone",
+   "items": [
+    {
+     "file": "stone/stone_ashlar.png",
+     "name": "stone_ashlar",
+     "sw": 1.2,
+     "sh": 0.9
+    },
+    {
+     "file": "stone/stone_cobble.png",
+     "name": "stone_cobble",
+     "sw": 0.8,
+     "sh": 0.8
+    }
+   ]
+  },
+  {
+   "id": "wood",
+   "items": [
+    {
+     "file": "wood/wood_planks_light.png",
+     "name": "wood_planks_light",
+     "sw": 1.0,
+     "sh": 1.0
+    },
+    {
+     "file": "wood/wood_planks_dark.png",
+     "name": "wood_planks_dark",
+     "sw": 1.0,
+     "sh": 1.0
+    }
+   ]
+  },
+  {
+   "id": "roof",
+   "items": [
+    {
+     "file": "roof/roof_tiles_colonial.png",
+     "name": "roof_tiles_colonial",
+     "sw": 0.9,
+     "sh": 0.6
+    },
+    {
+     "file": "roof/roof_corrugated.png",
+     "name": "roof_corrugated",
+     "sw": 0.9,
+     "sh": 0.9
+    }
+   ]
+  },
+  {
+   "id": "floor",
+   "items": [
+    {
+     "file": "floor/floor_ceramic_white.png",
+     "name": "floor_ceramic_white",
+     "sw": 0.6,
+     "sh": 0.6
+    },
+    {
+     "file": "floor/floor_ceramic_gray.png",
+     "name": "floor_ceramic_gray",
+     "sw": 0.6,
+     "sh": 0.6
+    },
+    {
+     "file": "floor/floor_checker.png",
+     "name": "floor_checker",
+     "sw": 0.8,
+     "sh": 0.8
+    },
+    {
+     "file": "floor/floor_pavers.png",
+     "name": "floor_pavers",
+     "sw": 0.8,
+     "sh": 0.8
+    }
+   ]
+  },
+  {
+   "id": "metal",
+   "items": [
+    {
+     "file": "metal/metal_brushed.png",
+     "name": "metal_brushed",
+     "sw": 1.0,
+     "sh": 1.0
+    },
+    {
+     "file": "metal/metal_dark.png",
+     "name": "metal_dark",
+     "sw": 1.0,
+     "sh": 1.0
+    }
+   ]
+  },
+  {
+   "id": "ground",
+   "items": [
+    {
+     "file": "ground/grass.png",
+     "name": "grass",
+     "sw": 1.5,
+     "sh": 1.5
+    },
+    {
+     "file": "ground/gravel.png",
+     "name": "gravel",
+     "sw": 1.0,
+     "sh": 1.0
+    },
+    {
+     "file": "ground/asphalt.png",
+     "name": "asphalt",
+     "sw": 1.5,
+     "sh": 1.5
+    }
+   ]
+  },
+  {
+   "id": "glass",
+   "items": [
+    {
+     "file": "glass/glass_blue.png",
+     "name": "glass_blue",
+     "sw": 1.0,
+     "sh": 1.0
+    }
+   ]
+  }
+ ]
+}
