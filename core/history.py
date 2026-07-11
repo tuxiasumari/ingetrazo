@@ -1253,6 +1253,102 @@ class RebuildPlanarFacesCommand(Command):
             scene.version += 1
 
 
+class RebuildPlaneFacesCommand(Command):
+    """Rebuild the faces of ONE plane of a (possibly 3D) mesh from that plane's
+    edge subgraph — the per-plane cousin of :class:`RebuildPlanarFacesCommand`.
+
+    Needed because the whole-mesh flat gate goes dark as soon as ANY 3D
+    geometry exists in the scene: two circles drawn on the ground next to a
+    solid stacked as full overlapping discs instead of splitting into three
+    areas. This command recomputes the arrangement of just the drawing plane
+    and leaves the rest of the model untouched.
+
+    Semantics: a minimal region keeps a face only if its interior was covered
+    by an existing on-plane face (the freshly drawn loop's face, added by the
+    tool before this command, provides coverage for the new regions). Uncovered
+    regions stay empty — no resurrecting faces the user deleted. Winding and
+    attrs inherit from the covering face; edges are reused (the planner already
+    split every crossing), so soft/curve flags survive. Snapshot undo."""
+
+    _TOL = 1e-4
+
+    def __init__(self, origin: QVector3D, normal: QVector3D) -> None:
+        self.origin = QVector3D(origin)
+        self.normal = QVector3D(normal).normalized()
+        self.snapshot: Optional[dict] = None
+        self.rebuilt = 0
+
+    def _on_plane(self, p: QVector3D) -> bool:
+        return abs(QVector3D.dotProduct(p - self.origin, self.normal)) < self._TOL
+
+    def do(self, scene) -> None:
+        from core.arrangement import planar_rebuild
+        from core.triangulate import triangulate
+
+        self.snapshot = scene.mesh.capture_state()
+        mesh = scene.mesh
+        plane_edges = [e for e in mesh.edges
+                       if self._on_plane(e.a) and self._on_plane(e.b)]
+        if not plane_edges:
+            return
+        plane_faces = [
+            f for f in mesh.faces
+            if all(self._on_plane(v.position) for v in f.loop)
+            and all(self._on_plane(v.position) for h in f.hole_loops for v in h)
+        ]
+        old = [([tuple(t) for t in f.triangulate()], f.normal(), dict(f.attrs))
+               for f in plane_faces]
+        segments = [(QVector3D(e.a), QVector3D(e.b)) for e in plane_edges]
+        _, regions = planar_rebuild(segments, self.origin, self.normal)
+
+        def covering(outer, holes):
+            tris = triangulate(outer, holes, self.normal)
+            if not tris:
+                return None
+            probe = (tris[0][0] + tris[0][1] + tris[0][2]) / 3.0
+            for old_tris, nrm, attrs in old:
+                if any(_point_in_tri(probe, t0, t1, t2)
+                       for t0, t1, t2 in old_tris):
+                    return nrm, attrs
+            return None
+
+        keep = []
+        for outer, holes in regions:
+            cov = covering(outer, holes or [])
+            if cov is None:
+                continue                      # uncovered region: stays empty
+            nrm, attrs = cov
+            # Arrangement emits CCW around self.normal; match the old face.
+            from core.triangulate import _newell
+            if QVector3D.dotProduct(_newell(outer), nrm) < 0:
+                outer = list(reversed(outer))
+                holes = [list(reversed(h)) for h in (holes or [])]
+            keep.append((outer, holes or None, attrs))
+        for f in plane_faces:
+            mesh.remove_face(f)
+        for outer, holes, attrs in keep:
+            f = mesh.add_face(outer, holes)
+            if attrs:
+                f.attrs.update(attrs)
+        # AddFaceCommand re-creates a polygon's full-length side even when the
+        # planner already split it at a crossing — a border-0 collinear
+        # duplicate that fragments the curve contours at resplit (degree-3
+        # vertices). The regions above were re-added from the fully noded
+        # arrangement, so the duplicates now bound nothing: prune them.
+        from core.topology import prune_collinear_orphan_edges
+
+        prune_collinear_orphan_edges(mesh)
+        mesh.resplit_curves()
+        self.rebuilt = len(keep)
+        scene.selection.clear()
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self.snapshot is not None:
+            scene.mesh.restore_state(self.snapshot)
+            scene.version += 1
+
+
 class CompoundCommand(Command):
     """A list of commands executed and reverted as one atomic step."""
 

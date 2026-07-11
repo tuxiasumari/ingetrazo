@@ -178,13 +178,22 @@ class ArcTool(Tool):
         segments = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
         # The arc's segments are drawn (a 16-segment arc reads smooth); a
         # *swept* arc's vertical facets are hidden later by Push/Pull.
-        from tools.circle import flat_drawing
+        from tools.circle import busy_plane, flat_drawing
         if flat_drawing(viewport.scene, pts):
             # Flat drawing → deterministic planar arrangement (see circle.py).
             cmd = build_add_edges(
                 viewport.scene, segments, detect_faces=False,
                 extra=[TagCurveCommand(list(pts), closed=False),
                        RebuildPlanarFacesCommand()])
+        elif (plane := busy_plane(viewport.scene, pts)) is not None:
+            # 3D scene, drawing plane already carries content → scoped
+            # per-plane arrangement (see circle.py). detect_faces still runs so
+            # a closing arc contributes its face as coverage.
+            from core.history import RebuildPlaneFacesCommand
+            cmd = build_add_edges(
+                viewport.scene, segments, detect_faces=True,
+                extra=[TagCurveCommand(list(pts), closed=False),
+                       RebuildPlaneFacesCommand(*plane)])
         else:
             cmd = build_add_edges(viewport.scene, segments, detect_faces=True,
                                   extra=[TagCurveCommand(list(pts), closed=False)])
@@ -269,13 +278,22 @@ class ThreePointArcTool(Tool):
 
     def _commit(self, viewport, pts: list[QVector3D]) -> None:
         segments = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
-        from tools.circle import flat_drawing
+        from tools.circle import busy_plane, flat_drawing
         if flat_drawing(viewport.scene, pts):
             # Flat drawing → deterministic planar arrangement (see circle.py).
             cmd = build_add_edges(
                 viewport.scene, segments, detect_faces=False,
                 extra=[TagCurveCommand(list(pts), closed=False),
                        RebuildPlanarFacesCommand()])
+        elif (plane := busy_plane(viewport.scene, pts)) is not None:
+            # 3D scene, drawing plane already carries content → scoped
+            # per-plane arrangement (see circle.py). detect_faces still runs so
+            # a closing arc contributes its face as coverage.
+            from core.history import RebuildPlaneFacesCommand
+            cmd = build_add_edges(
+                viewport.scene, segments, detect_faces=True,
+                extra=[TagCurveCommand(list(pts), closed=False),
+                       RebuildPlaneFacesCommand(*plane)])
         else:
             cmd = build_add_edges(viewport.scene, segments, detect_faces=True,
                                   extra=[TagCurveCommand(list(pts), closed=False)])

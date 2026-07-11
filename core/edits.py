@@ -151,24 +151,41 @@ def _scene_has_curves(scene) -> bool:
 
 
 def _append_flat_curve_rebuild(scene, commands, points) -> None:
-    """When straight edges land on a *flat* drawing that contains curves,
+    """When straight edges land on a drawing plane that contains curves,
     append the planar-arrangement rebuild (the same deterministic pass the
     circle/arc tools run). The cycle-detection planner reasons in straight
     segments and cannot form the regions a curve crossing creates — a square
     drawn over a circle must split into three areas (SketchUp), not stack a
-    duplicate face over the lens. Dangling edges survive the rebuild (spur
-    pruning only affects face tracing), so half-drawn chains are safe."""
-    from core.history import RebuildPlanarFacesCommand
+    duplicate face over the lens. Whole-flat drawings get the full rebuild;
+    3D scenes get the SCOPED per-plane one (only when that plane carries curve
+    edges, so straight-only 3D drawing keeps its proven path). Dangling edges
+    survive the rebuild (spur pruning only affects face tracing), so
+    half-drawn chains are safe."""
+    from core.history import RebuildPlanarFacesCommand, RebuildPlaneFacesCommand
 
     if not _scene_has_curves(scene):
         return
-    if any(isinstance(c, RebuildPlanarFacesCommand) for c in commands):
+    if any(isinstance(c, (RebuildPlanarFacesCommand, RebuildPlaneFacesCommand))
+           for c in commands):
         return
     from core.arrangement import coplanar_plane
 
     verts = [v.position for v in scene.mesh.vertices] + list(points)
     if coplanar_plane(verts) is not None:
         commands.append(RebuildPlanarFacesCommand())
+        return
+    plane = coplanar_plane(list(points))
+    if plane is None:
+        return
+    origin, normal = plane
+    tol = 1e-4
+
+    def on_plane(p):
+        return abs(QVector3D.dotProduct(p - origin, normal)) < tol
+
+    if any(e.curve is not None and on_plane(e.a) and on_plane(e.b)
+           for e in scene.mesh.edges):
+        commands.append(RebuildPlaneFacesCommand(origin, normal))
 
 
 def build_add_edge(scene, a: QVector3D, b: QVector3D, detect_faces: bool = True) -> Command:

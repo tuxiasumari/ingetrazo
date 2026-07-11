@@ -28,6 +28,26 @@ def flat_drawing(scene, new_points) -> bool:
     from core.arrangement import coplanar_plane
     verts = [v.position for v in scene.mesh.vertices] + list(new_points)
     return coplanar_plane(verts) is not None
+
+
+def busy_plane(scene, new_points):
+    """``(origin, normal)`` of the plane the new loop lies on, when that plane
+    already carries mesh content (edges or faces) — the gate for the scoped
+    per-plane arrangement in 3D scenes. As soon as ANY solid exists, the
+    whole-mesh flat gate goes dark; without this, a circle drawn over another
+    circle on the ground stacks two full discs instead of splitting into three
+    areas. ``None`` when the plane is virgin (naive path is enough)."""
+    from core.arrangement import coplanar_plane
+    plane = coplanar_plane(list(new_points))
+    if plane is None:
+        return None
+    origin, normal = plane
+    tol = 1e-4
+    for e in scene.mesh.edges:
+        if (abs(QVector3D.dotProduct(e.a - origin, normal)) < tol
+                and abs(QVector3D.dotProduct(e.b - origin, normal)) < tol):
+            return origin, normal
+    return None
 from core.i18n import tr
 from core.triangulate import plane_axes
 from tools.base import Tool, ToolContext
@@ -147,6 +167,15 @@ class _RadialTool(Tool):
             # disc. TagCurve first so the rebuild carries the curve id over.
             extra = [TagCurveCommand(list(pts), closed=True),
                      RebuildPlanarFacesCommand()]
+        elif (plane := busy_plane(viewport.scene, pts)) is not None:
+            # 3D scene, but the drawing plane already carries content: run the
+            # SCOPED arrangement on just that plane. The disc face goes in
+            # first so the new regions count as covered; the rebuild then
+            # splits every intersection (circle over circle next to a solid).
+            from core.history import RebuildPlaneFacesCommand
+            extra = [AddFaceCommand(list(pts)),
+                     TagCurveCommand(list(pts), closed=True),
+                     RebuildPlaneFacesCommand(*plane)]
         else:
             extra = [AddFaceCommand(list(pts)),
                      TagCurveCommand(list(pts), closed=True)]

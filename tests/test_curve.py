@@ -193,6 +193,88 @@ def test_square_drawn_after_circle_splits_three_areas():
     assert len(scene.mesh.edges) == 24
 
 
+def _click(vp, tool, x, y):
+    from PySide6.QtCore import QPointF, Qt
+    from tools.base import ToolContext
+    tool.on_click(ToolContext(viewport=vp, world=QVector3D(x, y, 0),
+                              screen=QPointF(0, 0), modifiers=Qt.NoModifier,
+                              snap=None))
+
+
+class _Vp:
+    def __init__(self, scene):
+        self.scene = scene
+        self.history = History(scene)
+
+    def update(self):
+        pass
+
+    def flash_status(self, *a, **k):
+        pass
+
+
+def test_two_circles_intersect_next_to_a_solid():
+    # As soon as ANY 3D geometry exists, the whole-mesh flat gate goes dark and
+    # curves used to fall back to naive stacked discs (no lens, z-fighting).
+    # The scoped per-plane arrangement must still split into three areas and
+    # leave the solid untouched.
+    from tools.circle import CircleTool
+
+    scene = Scene()
+    vp = _Vp(scene)
+    marker = scene.mesh.add_face([QVector3D(20, 20, 5), QVector3D(24, 20, 5),
+                                  QVector3D(24, 24, 5)])
+    for cx in (0, 5):
+        t = CircleTool()
+        t.work_plane = None
+        _click(vp, t, cx, 0)
+        _click(vp, t, cx + 4, 0)
+    ground = [f for f in scene.mesh.faces
+              if all(abs(v.position.z()) < 1e-6 for v in f.loop)]
+    assert len(ground) == 3                      # lens + two crescents
+    areas = sorted(round(f.area(), 1) for f in ground)
+    assert areas[0] < areas[1] == areas[2]
+    assert marker in scene.mesh.faces            # 3D geometry untouched
+    # contours: each circle split in two at the crossings — and no fragment
+    # contours from AddFace's full-length duplicate chords (pruned)
+    sizes = sorted(len([e for e in scene.mesh.edges if e.curve == cid])
+                   for cid in {e.curve for e in scene.mesh.edges
+                               if e.curve is not None})
+    assert sizes == [8, 8, 18, 18]
+    vp.history.undo()
+    assert len(scene.mesh.faces) == 2            # circle 1 disc + marker
+    assert len({e.curve for e in scene.mesh.edges
+                if e.curve is not None}) == 1
+
+
+def test_square_over_circle_next_to_a_solid():
+    # Same 3D-scene gate for STRAIGHT edges over curves: the per-plane rebuild
+    # in build_add_edges must split square+circle into three areas.
+    from core.edits import build_add_edges
+    from core.history import AddFaceCommand
+
+    scene = Scene()
+    hist = History(scene)
+    scene.mesh.add_face([QVector3D(20, 20, 5), QVector3D(24, 20, 5),
+                         QVector3D(24, 24, 5)])
+    vp = _Vp(scene)
+    vp.history = hist
+    from tools.circle import CircleTool
+    t = CircleTool()
+    t.work_plane = None
+    _click(vp, t, 0, -2)
+    _click(vp, t, 4, -2)
+    sq = [QVector3D(-5, 0, 0), QVector3D(5, 0, 0),
+          QVector3D(5, 10, 0), QVector3D(-5, 10, 0)]
+    hist.execute(build_add_edges(
+        scene, [(sq[i], sq[(i + 1) % 4]) for i in range(4)],
+        detect_faces=True, extra=[AddFaceCommand(list(sq))]))
+    ground = [f for f in scene.mesh.faces
+              if all(abs(v.position.z()) < 1e-6 for v in f.loop)]
+    assert len(ground) == 3
+    assert sum(1 for f in ground if f.area() > 85) == 1   # no doubled square
+
+
 def test_deleting_one_contour_leaves_the_other():
     from core.history import EraseSelectionCommand
     from core.mesh import Edge
