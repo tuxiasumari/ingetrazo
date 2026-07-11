@@ -27,7 +27,9 @@ from georef.tiles import TileCache, TileSource
 
 # Slippy-map etiquette: identify the client and don't hammer servers. OSM's
 # usage policy in particular requires a real User-Agent.
-_USER_AGENT = b"IngeTrazo/0.0.1 (https://github.com/tuxiasumari/ingetrazo)"
+from core.version import __version__
+
+_USER_AGENT = (f"IngeTrazo/{__version__} (https://github.com/tuxiasumari/ingetrazo)").encode()
 
 
 def default_cache_dir() -> Path:

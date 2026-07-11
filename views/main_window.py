@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.i18n import available_languages, current_language, set_language, tr
+from core.version import __version__
 from core.group import Group
 from core.history import (
     ExplodeGroupCommand,
@@ -428,6 +429,7 @@ class MainWindow(QMainWindow):
             self,
             tr("About IngeTrazo"),
             "<h3>IngeTrazo</h3>"
+            f"<p>{tr('Version')} {__version__}</p>"
             f"<p>{tr('Free 3D modeler for architecture, civil engineering and 3D printing.')}</p>"
             f"<p>{tr('Created by')} <b>Marco Sumari Tellez</b><br>"
             f"{tr('Civil Engineer — Lima, Peru')}</p>"

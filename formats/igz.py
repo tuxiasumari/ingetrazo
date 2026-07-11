@@ -10,7 +10,7 @@ Layout::
 
     {
       "igz_format": 1,
-      "app_version": "0.0.1",
+      "app_version": __version__,
       "scene": {
         "edges": [
           {"a": [x, y, z], "b": [x, y, z]},
@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+from core.version import __version__
 
 from PySide6.QtGui import QVector3D
 
@@ -125,7 +127,7 @@ def save_scene(scene, path: Path) -> None:
         payload["guides"] = [g.to_dict() for g in guides]
     data = {
         "igz_format": CURRENT_FORMAT,
-        "app_version": "0.0.1",
+        "app_version": __version__,
         "scene": payload,
     }
     path.write_text(json.dumps(data, indent=2))
