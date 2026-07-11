@@ -570,6 +570,11 @@ class MainWindow(QMainWindow):
         self._refresh_vcb()
 
     def _on_make_group(self) -> None:
+        if self.viewport.scene.edit_group is not None:
+            self.viewport.flash_status(tr(
+                "Leave the group first (Esc) — nested groups aren't "
+                "supported yet"))
+            return
         sel = self.viewport.scene.selection
         faces = [f for f in sel if isinstance(f, Face)]
         edges = [e for e in sel if isinstance(e, Edge)]
@@ -578,6 +583,11 @@ class MainWindow(QMainWindow):
             self.viewport.update()
 
     def _on_explode_group(self) -> None:
+        if self.viewport.scene.edit_group is not None:
+            self.viewport.flash_status(tr(
+                "Leave the group first (Esc) — nested groups aren't "
+                "supported yet"))
+            return
         groups = [g for g in self.viewport.scene.selection if isinstance(g, Group)]
         for g in groups:
             self.viewport.history.execute(ExplodeGroupCommand(g))
@@ -923,6 +933,7 @@ class MainWindow(QMainWindow):
 
     # ---- File handling ------------------------------------------------------
     def _on_new(self) -> None:
+        self.viewport.end_group_edit()
         if not self._confirm_discard(tr("Discard current drawing?")):
             return
         scene = self.viewport.scene
@@ -936,6 +947,7 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     def _on_open(self) -> None:
+        self.viewport.end_group_edit()
         if not self._confirm_discard(
                 tr("Discard current drawing and open another?")):
             return
@@ -960,12 +972,14 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     def _on_save(self) -> None:
+        self.viewport.end_group_edit()
         if self._current_path is None:
             self._on_save_as()
             return
         self._do_save(self._current_path)
 
     def _on_save_as(self) -> None:
+        self.viewport.end_group_edit()
         default_name = (
             self._current_path.name if self._current_path is not None else "untitled.igz"
         )

@@ -90,6 +90,10 @@ class SelectTool(Tool):
         entity = self._pick(viewport, ctx.screen.x(), ctx.screen.y())
         additive = bool(ctx.modifiers & Qt.ShiftModifier)
         if entity is None:
+            if viewport.scene.edit_group is not None and not additive \
+                    and not viewport.scene.selection:
+                viewport.end_group_edit()       # click outside leaves the group
+                return
             if not additive:
                 viewport.scene.clear_selection()
         else:
@@ -110,9 +114,13 @@ class SelectTool(Tool):
 
     def on_double_click(self, ctx: ToolContext) -> None:
         """SketchUp double click: a face selects itself plus its bounding
-        edges; an edge selects itself plus its faces."""
+        edges; an edge selects itself plus its faces — and a GROUP opens for
+        editing (Groups v2: draw, push, erase inside it)."""
         viewport = ctx.viewport
         entity = self._pick(viewport, ctx.screen.x(), ctx.screen.y())
+        if isinstance(entity, Group):
+            viewport.begin_group_edit(entity)
+            return
         if not isinstance(entity, (Face, Edge)):
             self.on_click(ctx)
             return

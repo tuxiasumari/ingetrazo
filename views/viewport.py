@@ -1448,6 +1448,7 @@ class Viewport(QOpenGLWidget):
 
         # Construction guides (Tape Measure) — fine dashed scaffolding lines.
         self._draw_guides(painter)
+        self._draw_edit_group_box(painter)
 
         # Terrain-surface fills (draped / flat) under the georef paths — Track G.
         self._draw_geo_surfaces(painter)
@@ -1588,6 +1589,34 @@ class Viewport(QOpenGLWidget):
             painter.drawText(QPointF(px + 11, py + 17), label)
             painter.setPen(QPen(color))
             painter.drawText(QPointF(px + 10, py + 16), label)
+
+    def _draw_edit_group_box(self, painter: QPainter) -> None:
+        """Dashed bounding box around the group being edited — the visual cue
+        that you are INSIDE it (SketchUp draws the same box)."""
+        group = self.scene.edit_group
+        if group is None or not group.mesh.vertices:
+            return
+        xs = [v.position.x() for v in group.mesh.vertices]
+        ys = [v.position.y() for v in group.mesh.vertices]
+        zs = [v.position.z() for v in group.mesh.vertices]
+        lo = (min(xs), min(ys), min(zs))
+        hi = (max(xs), max(ys), max(zs))
+        corners = [QVector3D(x, y, z)
+                   for x in (lo[0], hi[0])
+                   for y in (lo[1], hi[1])
+                   for z in (lo[2], hi[2])]
+        pix = [self._world_to_pixel(c) for c in corners]
+        if any(p is None for p in pix):
+            return
+        pen = QPen(QColor(90, 110, 140), 1, Qt.DashLine)
+        painter.setPen(pen)
+        # Box edges: corner indices differing in exactly one axis bit.
+        for i in range(8):
+            for bit in (1, 2, 4):
+                j = i | bit
+                if j != i:
+                    painter.drawLine(int(pix[i][0]), int(pix[i][1]),
+                                     int(pix[j][0]), int(pix[j][1]))
 
     def _draw_guides(self, painter: QPainter) -> None:
         """Draw construction guides: fine dashed lines (and small crosses for
@@ -2275,10 +2304,13 @@ class Viewport(QOpenGLWidget):
         origin, direction = self._pixel_to_ray(screen_x, screen_y)
         if origin is None or direction is None:
             return None, None
-        sources = [(None, self.scene.faces)] + [
-            (g, g.mesh.faces) for g in self.scene.groups
-            if self.scene.entity_selectable(g)
-        ]
+        if self.scene.edit_group is not None:
+            sources = [(None, self.scene.faces)]
+        else:
+            sources = [(None, self.scene.faces)] + [
+                (g, g.mesh.faces) for g in self.scene.groups
+                if self.scene.entity_selectable(g)
+            ]
         hits: list[tuple[float, object, object]] = []
         for grp, faces in sources:
             for face in faces:
@@ -2303,6 +2335,8 @@ class Viewport(QOpenGLWidget):
     def pick_group(self, screen_x: float, screen_y: float):
         """The group whose geometry the cursor hits (front-most face, or nearest
         edge for a group that's only lines), or ``None``."""
+        if self.scene.edit_group is not None:
+            return None                     # inside a group: pick content
         origin, direction = self._pixel_to_ray(screen_x, screen_y)
         if origin is not None and direction is not None:
             best = None  # (t, group)
@@ -2387,6 +2421,24 @@ class Viewport(QOpenGLWidget):
         self.history.execute(EraseSelectionCommand(edges, faces))
         self.update()
         return True
+
+    # ---- Group-edit context (Groups v2) --------------------------------------
+    def begin_group_edit(self, group) -> None:
+        """Enter a group for editing (SketchUp double-click-into-group)."""
+        self.scene.begin_group_edit(group)
+        self._hover_entity = None
+        self.flash_status(tr(
+            "Editing group '{name}' — Esc or click outside to leave",
+            name=group.name), 4000)
+        self.update()
+
+    def end_group_edit(self) -> None:
+        if self.scene.edit_group is None:
+            return
+        self.scene.end_group_edit()
+        self._hover_entity = None
+        self.flash_status(tr("Left the group"), 2000)
+        self.update()
 
     def set_nav_mode(self, mode: Optional[str]) -> None:
         """Enter a SketchUp-style camera navigation mode ("orbit" / "pan").
@@ -2725,6 +2777,9 @@ class Viewport(QOpenGLWidget):
             if self.scene.selection:
                 self.scene.clear_selection()
                 self.update()
+                return
+            if self.scene.edit_group is not None:
+                self.end_group_edit()           # step out of the group
                 return
             if self.active_tool is not None:
                 self.active_tool.on_cancel(self)

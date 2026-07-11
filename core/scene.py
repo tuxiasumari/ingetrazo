@@ -54,6 +54,11 @@ class Scene:
     tile_layer: object | None = None
     # 3D draped terrain (Track G, G2 full) — display-only relief mesh, runtime.
     terrain: object | None = None
+    # Group-edit context (Groups v2): while set, ``mesh`` POINTS AT the edited
+    # group's mesh so every tool/command works inside the group transparently;
+    # ``_loose_mesh`` keeps the real loose mesh for render and restore.
+    edit_group: object | None = None
+    _loose_mesh: object | None = None
 
     # ---- Geometry views (read-only over the *loose* mesh) -------------------
     # Tools, edits and topology operate on this (the loose geometry); groups are
@@ -89,9 +94,36 @@ class Scene:
         visible, locked = self._layer_state(entity)
         return visible and not locked
 
+    # ---- Group-edit context (Groups v2) --------------------------------------
+    def begin_group_edit(self, group) -> None:
+        """Enter a group: tools and commands now edit ITS mesh (SketchUp's
+        double-click-into-group). Nested groups are not supported yet."""
+        if self.edit_group is not None:
+            self.end_group_edit()
+        self._loose_mesh = self.mesh
+        self.mesh = group.mesh
+        self.edit_group = group
+        self.selection.clear()
+        self.version += 1
+
+    def end_group_edit(self) -> None:
+        """Leave the group-edit context, restoring the loose mesh."""
+        if self.edit_group is None:
+            return
+        self.mesh = self._loose_mesh
+        self._loose_mesh = None
+        self.edit_group = None
+        self.selection.clear()
+        self.version += 1
+
+    @property
+    def loose_mesh(self):
+        """The real loose mesh regardless of the edit context."""
+        return self._loose_mesh if self.edit_group is not None else self.mesh
+
     # ---- Render views (loose + every group) ---------------------------------
     def render_edges(self):
-        for e in self.mesh.edges:
+        for e in self.loose_mesh.edges:
             if self.entity_visible(e):
                 yield e
         for g in self.groups:
@@ -99,7 +131,7 @@ class Scene:
                 yield from g.mesh.edges
 
     def render_faces(self):
-        for f in self.mesh.faces:
+        for f in self.loose_mesh.faces:
             if self.entity_visible(f):
                 yield f
         for g in self.groups:
@@ -135,6 +167,7 @@ class Scene:
         self.version += 1
 
     def clear(self) -> None:
+        self.end_group_edit()
         if (self.mesh.edges or self.mesh.faces or self.selection
                 or self.groups or self.dimensions or self.georef
                 or self.tile_layer or self.geo_paths or self.terrain

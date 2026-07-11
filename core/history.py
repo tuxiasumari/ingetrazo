@@ -91,6 +91,10 @@ class History:
             self._log_failure(cmd, exc)
             return
         self.last_error = None
+        # Remember which mesh was active (the loose one, or a group being
+        # edited): undo/redo re-enter that context so a snapshot restore never
+        # lands on the wrong mesh after the user exits the group.
+        cmd._history_mesh = self.scene.mesh
         self.undo_stack.append(cmd)
         self.redo_stack.clear()
 
@@ -113,7 +117,7 @@ class History:
         if not self.undo_stack:
             return False
         cmd = self.undo_stack.pop()
-        cmd.undo(self.scene)
+        self._in_command_mesh(cmd, lambda: cmd.undo(self.scene))
         self.redo_stack.append(cmd)
         return True
 
@@ -121,9 +125,23 @@ class History:
         if not self.redo_stack:
             return False
         cmd = self.redo_stack.pop()
-        cmd.do(self.scene)
+        self._in_command_mesh(cmd, lambda: cmd.do(self.scene))
         self.undo_stack.append(cmd)
         return True
+
+    def _in_command_mesh(self, cmd, fn) -> None:
+        """Run ``fn`` with ``scene.mesh`` pointing at the mesh the command was
+        executed against (group-edit context correctness)."""
+        target = getattr(cmd, "_history_mesh", None)
+        if target is None or target is self.scene.mesh:
+            fn()
+            return
+        current = self.scene.mesh
+        self.scene.mesh = target
+        try:
+            fn()
+        finally:
+            self.scene.mesh = current
 
     def clear(self) -> None:
         self.undo_stack.clear()
