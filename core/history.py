@@ -722,6 +722,91 @@ class MoveVerticesCommand(Command):
             scene.version += 1
 
 
+def rotation_matrix(center: QVector3D, axis: QVector3D, degrees: float):
+    """Rigid rotation of ``degrees`` around ``axis`` through ``center``."""
+    from PySide6.QtGui import QMatrix4x4
+    m = QMatrix4x4()
+    m.translate(center)
+    m.rotate(degrees, axis.normalized())
+    m.translate(-center)
+    return m
+
+
+def rotate_points(scene, keys: set, matrix) -> None:
+    """Rotate every shared vertex whose position key is in ``keys`` by the
+    rigid ``matrix`` (the rotation twin of :func:`translate_points`). Shared
+    by :class:`RotateVerticesCommand` and the Rotate tool's live preview."""
+    moving = [v for v in scene.mesh.vertices if _key(v.position) in keys]
+    for v in moving:
+        scene.mesh.move_vertex(v, matrix.map(v.position) - v.position)
+    scene.version += 1
+
+
+class RotateVerticesCommand(Command):
+    """Rotate every shared vertex at a set of positions around ``axis``
+    through ``center`` by ``degrees``, then **autofold** (a partial rotation
+    can warp attached faces out of plane, same as Move). Undo/redo restore
+    identity-preserving snapshots — the exact mirror of
+    :class:`MoveVerticesCommand`."""
+
+    def __init__(self, positions: Iterable[QVector3D], center: QVector3D,
+                 axis: QVector3D, degrees: float) -> None:
+        self.src = [QVector3D(p) for p in positions]
+        self.center = QVector3D(center)
+        self.axis = QVector3D(axis)
+        self.degrees = degrees
+        self._before: Optional[dict] = None
+        self._after: Optional[dict] = None
+
+    def do(self, scene) -> None:
+        if self._after is not None:  # redo
+            scene.mesh.restore_state(self._after)
+            scene.version += 1
+            return
+        self._before = scene.mesh.capture_state()
+        m = rotation_matrix(self.center, self.axis, self.degrees)
+        rotate_points(scene, {_key(p) for p in self.src}, m)
+        fold_nonplanar_faces(scene.mesh)
+        self._after = scene.mesh.capture_state()
+
+    def undo(self, scene) -> None:
+        if self._before is not None:
+            scene.mesh.restore_state(self._before)
+            scene.version += 1
+
+
+class RotateGroupCommand(Command):
+    """Rotate a whole group's isolated mesh (rigid — nothing folds). Snapshot
+    undo/redo on the group's own mesh."""
+
+    def __init__(self, group, center: QVector3D, axis: QVector3D,
+                 degrees: float) -> None:
+        self.group = group
+        self.center = QVector3D(center)
+        self.axis = QVector3D(axis)
+        self.degrees = degrees
+        self._before: Optional[dict] = None
+        self._after: Optional[dict] = None
+
+    def do(self, scene) -> None:
+        gmesh = self.group.mesh
+        if self._after is not None:  # redo
+            gmesh.restore_state(self._after)
+            scene.version += 1
+            return
+        self._before = gmesh.capture_state()
+        m = rotation_matrix(self.center, self.axis, self.degrees)
+        for v in list(gmesh.vertices):
+            gmesh.move_vertex(v, m.map(v.position) - v.position)
+        self._after = gmesh.capture_state()
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self._before is not None:
+            self.group.mesh.restore_state(self._before)
+            scene.version += 1
+
+
 class PruneOrphanEdgesCommand(Command):
     """Remove edges incident to ``vertices`` that, once the rest of a compound
     has run, border no face — the dangling lines left where push/pull carved

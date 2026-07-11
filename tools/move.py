@@ -31,6 +31,47 @@ from core.topology import _key
 from tools.base import Tool, ToolContext
 
 
+
+def _dedup(positions: list[QVector3D]) -> list[QVector3D]:
+    seen = set()
+    out = []
+    for p in positions:
+        k = _key(p)
+        if k not in seen:
+            seen.add(k)
+            out.append(QVector3D(p))
+    return out
+
+
+def gather_targets(ctx: ToolContext):
+    """What a transform tool acts on: ``(group, positions)``. A selected or
+    hovered group transforms as a unit; otherwise unique positions from the
+    selection or the entity under the cursor. Shared by Move and Rotate."""
+    viewport = ctx.viewport
+    entities = list(viewport.scene.selection)
+    if not entities:
+        group = viewport.pick_group(ctx.screen.x(), ctx.screen.y())
+        if group is not None:
+            return group, []
+        edge = viewport.pick_edge(ctx.screen.x(), ctx.screen.y())
+        if edge is not None:
+            entities = [edge]
+        else:
+            face = viewport.pick_face(ctx.screen.x(), ctx.screen.y())
+            if face is not None:
+                entities = [face]
+    for ent in entities:
+        if isinstance(ent, Group):
+            return ent, []
+    positions: list[QVector3D] = []
+    for ent in entities:
+        if isinstance(ent, Edge):
+            positions.extend([ent.a, ent.b])
+        elif isinstance(ent, Face):
+            positions.extend(ent.vertices)
+    return None, _dedup(positions)
+
+
 class MoveTool(Tool):
     name = "Move"
     shortcut = "M"
@@ -130,43 +171,7 @@ class MoveTool(Tool):
 
     # ---- Internals ----------------------------------------------------------
     def _gather(self, ctx: ToolContext):
-        """What to move: ``(group, positions)``. A selected/hovered group moves
-        as a unit; otherwise unique positions from the selection or the entity
-        under the cursor."""
-        viewport = ctx.viewport
-        entities = list(viewport.scene.selection)
-        if not entities:
-            group = viewport.pick_group(ctx.screen.x(), ctx.screen.y())
-            if group is not None:
-                return group, []
-            edge = viewport.pick_edge(ctx.screen.x(), ctx.screen.y())
-            if edge is not None:
-                entities = [edge]
-            else:
-                face = viewport.pick_face(ctx.screen.x(), ctx.screen.y())
-                if face is not None:
-                    entities = [face]
-        for ent in entities:
-            if isinstance(ent, Group):
-                return ent, []
-        positions: list[QVector3D] = []
-        for ent in entities:
-            if isinstance(ent, Edge):
-                positions.extend([ent.a, ent.b])
-            elif isinstance(ent, Face):
-                positions.extend(ent.vertices)
-        return None, self._dedup(positions)
-
-    @staticmethod
-    def _dedup(positions: list[QVector3D]) -> list[QVector3D]:
-        seen = set()
-        out = []
-        for p in positions:
-            k = _key(p)
-            if k not in seen:
-                seen.add(k)
-                out.append(QVector3D(p))
-        return out
+        return gather_targets(ctx)
 
     def _shift(self, viewport, step: QVector3D) -> None:
         """Translate the live geometry by ``step`` — a whole group's mesh, or the

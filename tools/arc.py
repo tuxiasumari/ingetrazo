@@ -68,6 +68,32 @@ def _arc_3pts_2d(s, m, e, segments):
             for k in range(segments + 1)]
 
 
+
+
+def commit_arc(viewport, pts: list[QVector3D]) -> None:
+    """Commit an arc polyline with the shared curve pipeline: planar
+    arrangement on flat drawings, scoped per-plane arrangement when the
+    drawing plane already carries content in a 3D scene, naive otherwise.
+    Used by every arc variant."""
+    segments = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
+    from tools.circle import busy_plane, flat_drawing
+    if flat_drawing(viewport.scene, pts):
+        cmd = build_add_edges(
+            viewport.scene, segments, detect_faces=False,
+            extra=[TagCurveCommand(list(pts), closed=False),
+                   RebuildPlanarFacesCommand()])
+    elif (plane := busy_plane(viewport.scene, pts)) is not None:
+        from core.history import RebuildPlaneFacesCommand
+        cmd = build_add_edges(
+            viewport.scene, segments, detect_faces=True,
+            extra=[TagCurveCommand(list(pts), closed=False),
+                   RebuildPlaneFacesCommand(*plane)])
+    else:
+        cmd = build_add_edges(viewport.scene, segments, detect_faces=True,
+                              extra=[TagCurveCommand(list(pts), closed=False)])
+    viewport.history.execute(cmd)
+
+
 class ArcTool(Tool):
     name = "Arc"
     shortcut = "A"
@@ -175,29 +201,7 @@ class ArcTool(Tool):
         return [self.start_point + u * x + v * y for x, y in pts2]
 
     def _commit(self, viewport, pts: list[QVector3D]) -> None:
-        segments = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
-        # The arc's segments are drawn (a 16-segment arc reads smooth); a
-        # *swept* arc's vertical facets are hidden later by Push/Pull.
-        from tools.circle import busy_plane, flat_drawing
-        if flat_drawing(viewport.scene, pts):
-            # Flat drawing → deterministic planar arrangement (see circle.py).
-            cmd = build_add_edges(
-                viewport.scene, segments, detect_faces=False,
-                extra=[TagCurveCommand(list(pts), closed=False),
-                       RebuildPlanarFacesCommand()])
-        elif (plane := busy_plane(viewport.scene, pts)) is not None:
-            # 3D scene, drawing plane already carries content → scoped
-            # per-plane arrangement (see circle.py). detect_faces still runs so
-            # a closing arc contributes its face as coverage.
-            from core.history import RebuildPlaneFacesCommand
-            cmd = build_add_edges(
-                viewport.scene, segments, detect_faces=True,
-                extra=[TagCurveCommand(list(pts), closed=False),
-                       RebuildPlaneFacesCommand(*plane)])
-        else:
-            cmd = build_add_edges(viewport.scene, segments, detect_faces=True,
-                                  extra=[TagCurveCommand(list(pts), closed=False)])
-        viewport.history.execute(cmd)
+        commit_arc(viewport, pts)
         self._reset()
         viewport.update()
 
@@ -277,31 +281,142 @@ class ThreePointArcTool(Tool):
         return [self.start_point + u * x + v * y for x, y in pts2]
 
     def _commit(self, viewport, pts: list[QVector3D]) -> None:
-        segments = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
-        from tools.circle import busy_plane, flat_drawing
-        if flat_drawing(viewport.scene, pts):
-            # Flat drawing → deterministic planar arrangement (see circle.py).
-            cmd = build_add_edges(
-                viewport.scene, segments, detect_faces=False,
-                extra=[TagCurveCommand(list(pts), closed=False),
-                       RebuildPlanarFacesCommand()])
-        elif (plane := busy_plane(viewport.scene, pts)) is not None:
-            # 3D scene, drawing plane already carries content → scoped
-            # per-plane arrangement (see circle.py). detect_faces still runs so
-            # a closing arc contributes its face as coverage.
-            from core.history import RebuildPlaneFacesCommand
-            cmd = build_add_edges(
-                viewport.scene, segments, detect_faces=True,
-                extra=[TagCurveCommand(list(pts), closed=False),
-                       RebuildPlaneFacesCommand(*plane)])
-        else:
-            cmd = build_add_edges(viewport.scene, segments, detect_faces=True,
-                                  extra=[TagCurveCommand(list(pts), closed=False)])
-        viewport.history.execute(cmd)
+        commit_arc(viewport, pts)
         self._reset()
         viewport.update()
 
     def _reset(self) -> None:
         self.start_point = None
         self.mid_point = None
+        self.work_plane = None
+
+
+class CenterArcTool(Tool):
+    """Compass arc (SketchUp's protractor 'Arc'): centre → start point (the
+    radius and 0° arm) → sweep angle. The polyline samples at the same 15°
+    pitch as the 24-side circle, so a centre arc drawn concentric with a
+    circle lands on the exact same lattice and welds cleanly."""
+
+    name = "Center Arc"
+    shortcut = "O"
+    vcb_label = "Angle"
+
+    _PITCH_DEG = 15.0
+
+    def __init__(self) -> None:
+        self.start_point: QVector3D | None = None   # the centre
+        self.arm_point: QVector3D | None = None     # radius + 0° direction
+        self.hover_point: QVector3D | None = None
+        self.work_plane: tuple[QVector3D, QVector3D] | None = None
+
+    # ---- Lifecycle ----------------------------------------------------------
+    def on_activate(self, viewport) -> None:
+        self._reset()
+
+    def on_deactivate(self, viewport) -> None:
+        self._reset()
+        self.hover_point = None
+
+    # ---- Spatial input ------------------------------------------------------
+    def on_click(self, ctx: ToolContext) -> None:
+        if self.start_point is None:
+            self.start_point = ctx.world
+            return
+        if self.arm_point is None:
+            if (ctx.world - self.start_point).length() < 1e-6:
+                return
+            self.arm_point = ctx.world
+            return
+        pts = self._points(self._sweep_to(ctx.world))
+        if len(pts) >= 2:
+            self._commit(ctx.viewport, pts)
+
+    def on_hover(self, ctx: ToolContext) -> None:
+        self.hover_point = ctx.world
+        ctx.viewport.update()
+
+    def on_value(self, viewport, value) -> bool:
+        if self.arm_point is None or isinstance(value, tuple):
+            return False
+        sign = -1.0
+        if self.hover_point is not None:
+            sweep = self._sweep_to(self.hover_point)
+            sign = -1.0 if sweep < 0 else 1.0
+        pts = self._points(sign * abs(value))
+        if len(pts) >= 2:
+            self._commit(viewport, pts)
+        return True
+
+    def on_cancel(self, viewport) -> None:
+        self._reset()
+        viewport.update()
+
+    # ---- Preview ------------------------------------------------------------
+    def rubber_band_lines(self):
+        if self.start_point is None or self.hover_point is None:
+            return []
+        if self.arm_point is None:
+            return [(self.start_point, self.hover_point)]     # the radius arm
+        segments = [(self.start_point, self.arm_point),
+                    (self.start_point, self.hover_point)]
+        pts = self._points(self._sweep_to(self.hover_point))
+        segments.extend(zip(pts, pts[1:]))
+        return segments
+
+    def value_label(self):
+        if self.hover_point is None or self.start_point is None:
+            return None
+        if self.arm_point is None:
+            r = (self.hover_point - self.start_point).length()
+            return (f"R {r:.2f} m", self.hover_point)
+        return (f"{self._sweep_to(self.hover_point):+.1f}°", self.hover_point)
+
+    def vcb_caption(self) -> str:
+        return "Angle" if self.arm_point is not None else "Radius"
+
+    # ---- Internals ----------------------------------------------------------
+    def _axes(self):
+        normal = (self.work_plane[1] if self.work_plane is not None
+                  else QVector3D(0.0, 0.0, 1.0))
+        return plane_axes(normal)
+
+    def _sweep_to(self, cursor: QVector3D) -> float:
+        """Signed sweep (degrees) from the 0° arm to the cursor."""
+        u, v = self._axes()
+        a = self.arm_point - self.start_point
+        b = cursor - self.start_point
+        a0 = math.atan2(QVector3D.dotProduct(a, v), QVector3D.dotProduct(a, u))
+        b0 = math.atan2(QVector3D.dotProduct(b, v), QVector3D.dotProduct(b, u))
+        deg = math.degrees(b0 - a0)
+        while deg <= -180.0:
+            deg += 360.0
+        while deg > 180.0:
+            deg -= 360.0
+        return deg
+
+    def _points(self, sweep_deg: float) -> list[QVector3D]:
+        if abs(sweep_deg) < 1e-6:
+            return []
+        u, v = self._axes()
+        a = self.arm_point - self.start_point
+        r = math.hypot(QVector3D.dotProduct(a, u), QVector3D.dotProduct(a, v))
+        if r < 1e-6:
+            return []
+        a0 = math.atan2(QVector3D.dotProduct(a, v), QVector3D.dotProduct(a, u))
+        steps = max(1, round(abs(sweep_deg) / self._PITCH_DEG))
+        out = []
+        for k in range(steps + 1):
+            t = a0 + math.radians(sweep_deg) * k / steps
+            out.append(self.start_point
+                       + (u * math.cos(t) + v * math.sin(t)) * r)
+        return out
+
+    def _commit(self, viewport, pts: list[QVector3D]) -> None:
+        commit_arc(viewport, pts)
+        self._reset()
+        viewport.update()
+
+    def _reset(self) -> None:
+        self.start_point = None
+        self.arm_point = None
         self.work_plane = None

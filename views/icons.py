@@ -132,6 +132,25 @@ def _arc3(p, ink):
     _dot(p, 24, 15)
 
 
+def _rotate(p, ink):
+    # Protractor: a swept arc with an arrowhead around a centre dot.
+    p.setBrush(Qt.NoBrush)
+    p.drawArc(QRectF(11, 11, 26, 26), 210 * 16, -240 * 16)
+    p.drawLine(QPointF(33.5, 11.5), QPointF(38, 14))
+    p.drawLine(QPointF(33.5, 11.5), QPointF(33, 17))
+    _dot(p, 24, 24)
+
+
+def _center_arc(p, ink):
+    # Compass arc: centre dot, radius arm, swept arc.
+    p.setBrush(Qt.NoBrush)
+    p.drawArc(QRectF(10, 10, 28, 28), 0, 105 * 16)
+    p.drawLine(QPointF(24, 24), QPointF(38, 24))
+    _dot(p, 24, 24)
+    _dot(p, 38, 24, 2.6)
+    _dot(p, 17, 12, 2.6)
+
+
 def _pushpull(p, ink):
     # A face with an up arrow (extrude).
     p.setBrush(Qt.NoBrush)
@@ -293,7 +312,8 @@ def _view_cube(face, filled):
 _DRAW = {
     "select": _select, "line": _line, "rectangle": _rectangle,
     "rotated_rect": _rotated_rect, "circle": _circle, "polygon": _polygon,
-    "arc": _arc, "arc3": _arc3, "pushpull": _pushpull, "offset": _offset,
+    "arc": _arc, "arc3": _arc3, "center_arc": _center_arc,
+    "rotate": _rotate, "pushpull": _pushpull, "offset": _offset,
     "move": _move, "paint": _paint, "dimension": _dimension,
     "geopath": _geopath, "orbit": _orbit, "pan": _pan,
     "eraser": _eraser, "tape": _tape,

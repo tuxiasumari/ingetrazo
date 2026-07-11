@@ -35,7 +35,7 @@ from core.mesh import Edge, Face
 from formats import igz as igz_format
 from formats import obj as obj_format
 from formats import stl as stl_format
-from tools.arc import ArcTool, ThreePointArcTool
+from tools.arc import CenterArcTool, ArcTool, ThreePointArcTool
 from tools.circle import CircleTool, PolygonTool
 from tools.dimension import DimensionTool
 from tools.eraser import EraserTool
@@ -43,6 +43,7 @@ from tools.geopath import GeoPathTool
 from tools.line import LineTool
 from tools.tape import TapeMeasureTool
 from tools.move import MoveTool
+from tools.rotate import RotateTool
 from tools.rotated_rectangle import RotatedRectangleTool
 from tools.offset import OffsetTool
 from tools.paint import PaintTool
@@ -74,9 +75,11 @@ class MainWindow(QMainWindow):
             "polygon": PolygonTool(),
             "arc": ArcTool(),
             "arc3": ThreePointArcTool(),
+            "center_arc": CenterArcTool(),
             "pushpull": PushPullTool(),
             "offset": OffsetTool(),
             "move": MoveTool(),
+            "rotate": RotateTool(),
             "paint": PaintTool(),
             "dimension": DimensionTool(),
             "eraser": EraserTool(),
@@ -171,8 +174,8 @@ class MainWindow(QMainWindow):
             ("main", tr("Main"), ["select", "eraser", "paint"]),
             ("draw", tr("Draw"),
              ["line", "rectangle", "rotated_rect", "circle", "polygon",
-              "arc", "arc3"]),
-            ("modify", tr("Modify"), ["move", "pushpull", "offset"]),
+              "arc", "arc3", "center_arc"]),
+            ("modify", tr("Modify"), ["move", "rotate", "pushpull", "offset"]),
             ("annotate", tr("Annotate"), ["tape", "dimension", "geopath"]),
         ]
         for oname, title, keys in layout:
