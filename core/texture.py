@@ -37,12 +37,21 @@ class Texture:
         return Texture(d["path"], float(d.get("sw", 1.0)), float(d.get("sh", 1.0)))
 
 
-def planar_uv(normal: QVector3D, positions, sw: float, sh: float):
+def planar_uv(normal: QVector3D, positions, sw: float, sh: float,
+              rot: float = 0.0):
     """SketchUp-style planar-projected ``(u, v)`` for each world ``positions``
     point: project onto the plane basis derived from ``normal`` (so coplanar
-    faces tile seamlessly), scaled by the tile size. ``sw``/``sh`` ≤ 0 fall back
-    to 1 to avoid a divide-by-zero."""
+    faces tile seamlessly), scaled by the tile size. ``rot`` turns the texture
+    in-plane by that many degrees (SketchUp's texture rotation). ``sw``/``sh``
+    ≤ 0 fall back to 1 to avoid a divide-by-zero."""
+    import math
+
     u_axis, v_axis = plane_axes(normal.normalized())
+    if rot:
+        a = math.radians(rot)
+        cos_a, sin_a = math.cos(a), math.sin(a)
+        u_axis, v_axis = (u_axis * cos_a + v_axis * sin_a,
+                          v_axis * cos_a - u_axis * sin_a)
     sw = sw if abs(sw) > 1e-9 else 1.0
     sh = sh if abs(sh) > 1e-9 else 1.0
     return [(QVector3D.dotProduct(p, u_axis) / sw,
@@ -52,4 +61,5 @@ def planar_uv(normal: QVector3D, positions, sw: float, sh: float):
 def face_uvs(face, tex: dict):
     """Planar UVs for ``face``'s outer-loop vertices from a texture attrs dict."""
     return planar_uv(face.normal(), list(face.vertices),
-                     float(tex.get("sw", 1.0)), float(tex.get("sh", 1.0)))
+                     float(tex.get("sw", 1.0)), float(tex.get("sh", 1.0)),
+                     float(tex.get("rot", 0.0)))

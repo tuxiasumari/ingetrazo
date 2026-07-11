@@ -141,3 +141,44 @@ def test_textured_obj_round_trips_the_texture(tmp_path):
     textured = [f for f in loaded.mesh.faces if f.attrs.get("texture")]
     assert len(textured) == 1
     assert Path(textured[0].attrs["texture"]["path"]).name == "checker.png"
+
+
+def test_planar_uv_rotation_and_scale():
+    # Bigger tile size = fewer repeats; rotation turns the UV frame in-plane
+    # (SketchUp's edit-material W/H/Rot).
+    from PySide6.QtGui import QVector3D
+
+    from core.texture import planar_uv
+
+    n = QVector3D(0, 0, 1)
+    pts = [QVector3D(1, 0, 0), QVector3D(0, 1, 0)]
+    # Doubling the tile halves the UV.
+    (u1, _), _ = planar_uv(n, pts, 1.0, 1.0)
+    (u2, _), _ = planar_uv(n, pts, 2.0, 2.0)
+    assert abs(u2 - u1 / 2.0) < 1e-9
+    # 90° rotation maps the +X point onto the (former) V axis.
+    (u90, v90), (u90b, v90b) = planar_uv(n, pts, 1.0, 1.0, rot=90.0)
+    (u0, v0), (u0b, v0b) = planar_uv(n, pts, 1.0, 1.0)
+    assert abs(abs(v90) - abs(u0)) < 1e-9         # swapped axes
+    assert abs(abs(u90b) - abs(v0b)) < 1e-6      # (0,1) lands on former U
+    # rotation preserves scale (rigid in-plane turn)
+    import math
+    assert abs(math.hypot(u90, v90) - math.hypot(u0, v0)) < 1e-9
+
+
+def test_texture_rotation_round_trips_igz(tmp_path):
+    from PySide6.QtGui import QVector3D
+
+    from core.scene import Scene
+    from formats import igz
+
+    scene = Scene()
+    f = scene.mesh.add_face([QVector3D(0, 0, 0), QVector3D(2, 0, 0),
+                             QVector3D(2, 2, 0), QVector3D(0, 2, 0)])
+    f.attrs["texture"] = {"path": "x.png", "sw": 1.5, "sh": 0.75, "rot": 45.0}
+    p = tmp_path / "rot.igz"
+    igz.save_scene(scene, p)
+    scene2 = Scene()
+    igz.load_into(scene2, p)
+    tex = scene2.mesh.faces[0].attrs["texture"]
+    assert tex["rot"] == 45.0 and tex["sw"] == 1.5

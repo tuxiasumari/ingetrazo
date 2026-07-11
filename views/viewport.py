@@ -1201,6 +1201,12 @@ class Viewport(QOpenGLWidget):
             buf = by_texture[path] = array("f")
         n = face.normal().normalized()
         u_axis, v_axis = plane_axes(n)
+        rot = float(tex.get("rot", 0.0))
+        if rot:
+            a = math.radians(rot)
+            cos_a, sin_a = math.cos(a), math.sin(a)
+            u_axis, v_axis = (u_axis * cos_a + v_axis * sin_a,
+                              v_axis * cos_a - u_axis * sin_a)
         sw = tex.get("sw", 1.0) or 1.0
         sh = tex.get("sh", 1.0) or 1.0
         for tri in face.triangulate():

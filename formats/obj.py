@@ -71,8 +71,9 @@ def save_obj(scene, path) -> None:
             n = face.normal()
             sw = tex.get("sw", 1.0) or 1.0
             sh = tex.get("sh", 1.0) or 1.0
+            rot = float(tex.get("rot", 0.0))
             for tri in face.triangulate():
-                uv = planar_uv(n, list(tri), sw, sh)
+                uv = planar_uv(n, list(tri), sw, sh, rot)
                 groups.setdefault(key, []).append(
                     [(vidx(tri[k]), uvidx(uv[k])) for k in range(3)])
         else:

@@ -365,6 +365,41 @@ class MaterialsPanel(QWidget):
         row.addStretch(1)
         root.addLayout(row)
 
+        # SketchUp's "edit material": tile width/height + rotation. Edits the
+        # active texture for future paints, and Apply re-stamps the selected
+        # textured faces (undoable).
+        from PySide6.QtWidgets import QDoubleSpinBox
+        edit_row = QHBoxLayout()
+        edit_row.addWidget(QLabel(tr("W")))
+        self._sw_box = QDoubleSpinBox()
+        self._sw_box.setRange(0.01, 1000.0)
+        self._sw_box.setDecimals(2)
+        self._sw_box.setSingleStep(0.1)
+        self._sw_box.setSuffix(" m")
+        edit_row.addWidget(self._sw_box)
+        edit_row.addWidget(QLabel(tr("H")))
+        self._sh_box = QDoubleSpinBox()
+        self._sh_box.setRange(0.01, 1000.0)
+        self._sh_box.setDecimals(2)
+        self._sh_box.setSingleStep(0.1)
+        self._sh_box.setSuffix(" m")
+        edit_row.addWidget(self._sh_box)
+        edit_row.addWidget(QLabel(tr("Rot")))
+        self._rot_box = QDoubleSpinBox()
+        self._rot_box.setRange(-360.0, 360.0)
+        self._rot_box.setDecimals(0)
+        self._rot_box.setSingleStep(15.0)
+        self._rot_box.setSuffix("°")
+        edit_row.addWidget(self._rot_box)
+        apply_btn = QPushButton(tr("Apply"))
+        apply_btn.setToolTip(tr(
+            "Resize/rotate the active texture; with textured faces selected, "
+            "re-stamps them (undoable)"))
+        apply_btn.clicked.connect(self._on_apply_texture_edit)
+        edit_row.addWidget(apply_btn)
+        root.addLayout(edit_row)
+        self._load_texture_fields()
+
         root.addWidget(self._heading(tr("In model")))
         self._in_model_grid = QGridLayout()
         self._in_model_grid.setSpacing(3)
@@ -511,13 +546,56 @@ class MaterialsPanel(QWidget):
         self._window._activate_tool("paint")
         self._refresh_preview()
 
+    def _load_texture_fields(self) -> None:
+        tex = PaintTool.current_texture
+        if tex:
+            self._sw_box.setValue(float(tex.get("sw", 1.0)))
+            self._sh_box.setValue(float(tex.get("sh", 1.0)))
+            self._rot_box.setValue(float(tex.get("rot", 0.0)))
+        else:
+            self._sw_box.setValue(self._tile_size)
+            self._sh_box.setValue(self._tile_size)
+            self._rot_box.setValue(0.0)
+
+    def _on_apply_texture_edit(self) -> None:
+        """Push the W/H/Rot fields onto the active texture and onto any
+        selected textured faces (one undoable step)."""
+        from core.history import SetFaceTextureCommand
+        sw = self._sw_box.value()
+        sh = self._sh_box.value()
+        rot = self._rot_box.value() % 360.0
+        if PaintTool.current_texture:
+            PaintTool.current_texture = {
+                **PaintTool.current_texture, "sw": sw, "sh": sh, "rot": rot}
+        scene = self._window.viewport.scene
+        targets = [f for f in scene.selection
+                   if isinstance(f, Face) and f.attrs.get("texture")]
+        if targets:
+            # Each face keeps its own image; only size/rotation change.
+            from core.history import CompoundCommand
+            cmds = []
+            for f in targets:
+                tex = {**f.attrs["texture"], "sw": sw, "sh": sh, "rot": rot}
+                cmds.append(SetFaceTextureCommand([f], tex))
+            cmd = cmds[0] if len(cmds) == 1 else CompoundCommand(cmds)
+            self._window.viewport.history.execute(cmd)
+            self._window.viewport.update()
+            self._window.statusBar().showMessage(
+                tr("Texture updated on {n} faces", n=len(targets)), 2500)
+        elif not PaintTool.current_texture:
+            self._window.statusBar().showMessage(
+                tr("Pick a texture (or select textured faces) first"), 2500)
+        self._refresh_preview()
+
     def _apply_texture(self, path: str, size: float | None = None,
                        sw: float | None = None,
                        sh: float | None = None) -> None:
         w = sw if sw is not None else (size or self._tile_size)
         h = sh if sh is not None else (size or self._tile_size)
-        PaintTool.current_texture = {"path": path, "sw": w, "sh": h}
+        PaintTool.current_texture = {"path": path, "sw": w, "sh": h,
+                                     "rot": 0.0}
         self._window._activate_tool("paint")
+        self._load_texture_fields()
         self._refresh_preview()
 
     def _add_color(self) -> None:
