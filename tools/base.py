@@ -91,6 +91,11 @@ class Tool(ABC):
     def on_cancel(self, viewport) -> None:
         """Esc pressed — abandon any in-progress operation."""
 
+    def on_release(self, viewport) -> None:
+        """Left button released. Tools that act on press-drag-release strokes
+        (the Eraser) override this; the default is a no-op, so click-driven
+        tools are unaffected."""
+
     # ---- Key dispatch -------------------------------------------------------
     def on_key(self, viewport, key: int, modifiers: Qt.KeyboardModifiers) -> bool:
         """Tool gets first shot at the key. Return True to consume it."""

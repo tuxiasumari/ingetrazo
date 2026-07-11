@@ -1422,6 +1422,9 @@ class Viewport(QOpenGLWidget):
         # the extrusion is snapping level with).
         self._draw_inference_marker(painter)
 
+        # Construction guides (Tape Measure) — fine dashed scaffolding lines.
+        self._draw_guides(painter)
+
         # Terrain-surface fills (draped / flat) under the georef paths — Track G.
         self._draw_geo_surfaces(painter)
 
@@ -1561,6 +1564,27 @@ class Viewport(QOpenGLWidget):
             painter.drawText(QPointF(px + 11, py + 17), label)
             painter.setPen(QPen(color))
             painter.drawText(QPointF(px + 10, py + 16), label)
+
+    def _draw_guides(self, painter: QPainter) -> None:
+        """Draw construction guides: fine dashed lines (and small crosses for
+        guide points), SketchUp-style scaffolding."""
+        guides = getattr(self.scene, "guides", None)
+        if not guides:
+            return
+        pen = QPen(QColor(70, 90, 120), 1, Qt.DashLine)
+        painter.setPen(pen)
+        for g in guides:
+            if g.is_line:
+                a, b = g.segment()
+                pa = self._world_to_pixel(a)
+                pb = self._world_to_pixel(b)
+                if pa is not None and pb is not None:
+                    painter.drawLine(QPointF(*pa), QPointF(*pb))
+            else:
+                q = self._world_to_pixel(g.point)
+                if q is not None:
+                    painter.drawLine(QPointF(q[0] - 5, q[1]), QPointF(q[0] + 5, q[1]))
+                    painter.drawLine(QPointF(q[0], q[1] - 5), QPointF(q[0], q[1] + 5))
 
     def _draw_geo_surfaces(self, painter: QPainter) -> None:
         """Draw terrain-surface fills as shaded, back-to-front triangles so the
@@ -2069,6 +2093,38 @@ class Viewport(QOpenGLWidget):
                     best = path
         return best
 
+    def _snap_scene(self):
+        """The scene the snap engine sees: real edges plus construction guides
+        as pseudo-edges (``Guide.a/.b`` span the long segment), so drawing tools
+        lock onto guides — a guide's whole purpose."""
+        guides = getattr(self.scene, "guides", None)
+        if not guides:
+            return self.scene
+        from types import SimpleNamespace
+        lines = [g for g in guides if g.is_line]
+        if not lines:
+            return self.scene
+        return SimpleNamespace(edges=list(self.scene.edges) + lines)
+
+    def pick_guide(self, screen_x: float, screen_y: float):
+        """Return the construction guide nearest the cursor within the pick
+        threshold, or ``None`` (for the Eraser)."""
+        guides = getattr(self.scene, "guides", None)
+        if not guides:
+            return None
+        best, best_d = None, self.pick_threshold_px
+        for g in guides:
+            a, b = g.segment()
+            pa = self._world_to_pixel(a)
+            pb = self._world_to_pixel(b)
+            if pa is None or pb is None:
+                continue
+            d = _point_to_segment_distance_2d((screen_x, screen_y), pa, pb)
+            if d < best_d:
+                best_d = d
+                best = g
+        return best
+
     def pick_vertex(self, screen_x: float, screen_y: float):
         """Return the scene vertex (corner) closest to the cursor within the
         pick threshold, or ``None``. Used to acquire a corner as a 'from point'
@@ -2433,6 +2489,12 @@ class Viewport(QOpenGLWidget):
             self.setCursor(Qt.OpenHandCursor)
             return
 
+        # Stroke tools (the Eraser): notify the release so a press-drag-release
+        # stroke can commit as one step. No-op default on other tools.
+        if (ev.button() == Qt.LeftButton and self.active_tool is not None
+                and not self._box_active and self.nav_mode is None):
+            self.active_tool.on_release(self)
+
         if ev.button() == Qt.LeftButton and self._box_active:
             self._box_active = False
             start = self._box_start
@@ -2627,7 +2689,7 @@ class Viewport(QOpenGLWidget):
         snap = compute_snap(
             candidate_world=world_raw,
             candidate_pixel=(px_x, px_y),
-            scene=self.scene,
+            scene=self._snap_scene(),
             world_to_pixel=self._world_to_pixel,
             threshold_px=self.snap_threshold_px,
             project_onto_line=lambda s, d: self._project_to_lock_line(s, d, px_x, px_y),
@@ -2816,7 +2878,7 @@ class Viewport(QOpenGLWidget):
         snap = compute_snap(
             candidate_world=world_raw,
             candidate_pixel=(px_x, px_y),
-            scene=self.scene,
+            scene=self._snap_scene(),
             world_to_pixel=self._world_to_pixel,
             threshold_px=self.snap_threshold_px,
             project_onto_line=lambda s, d: self._project_to_lock_line(s, d, px_x, px_y),

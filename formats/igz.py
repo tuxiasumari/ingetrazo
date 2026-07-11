@@ -99,6 +99,9 @@ def save_scene(scene, path: Path) -> None:
     paths = getattr(scene, "geo_paths", None)
     if paths:
         payload["geo_paths"] = [p.to_dict() for p in paths]
+    guides = getattr(scene, "guides", None)
+    if guides:
+        payload["guides"] = [g.to_dict() for g in guides]
     data = {
         "igz_format": CURRENT_FORMAT,
         "app_version": "0.0.1",
@@ -145,6 +148,11 @@ def load_into(scene, path: Path) -> None:
 
     for raw in payload.get("geo_paths", []):
         scene.geo_paths.append(GeoPath.from_dict(raw))
+
+    from core.guide import Guide
+    scene.guides.clear()
+    for raw in payload.get("guides", []):
+        scene.guides.append(Guide.from_dict(raw))
 
     scene.version += 1
 

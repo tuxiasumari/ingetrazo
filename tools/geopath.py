@@ -27,7 +27,7 @@ _NODE_PX = 9    # grab an existing node within this pixel radius
 
 class GeoPathTool(Tool):
     name = "Path"
-    shortcut = "T"
+    shortcut = "Y"   # T went to Tape Measure (SketchUp's key for it)
     vcb_label = "Length"
     uses_snap = False  # a georef trace snaps to nothing in the modelling mesh
 

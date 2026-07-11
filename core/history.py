@@ -463,6 +463,43 @@ class DeleteDimensionsCommand(Command):
         scene.version += 1
 
 
+class AddGuideCommand(Command):
+    """Add a construction guide (Tape Measure) to ``scene.guides``."""
+
+    def __init__(self, guide) -> None:
+        self.guide = guide
+
+    def do(self, scene) -> None:
+        scene.guides.append(self.guide)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self.guide in scene.guides:
+            scene.guides.remove(self.guide)
+        scene.version += 1
+
+
+class DeleteGuidesCommand(Command):
+    """Remove construction guides (the Eraser, or Edit ▸ Delete Guides)."""
+
+    def __init__(self, guides) -> None:
+        self._guides = list(guides)
+        self._restore: list[tuple[int, object]] = []
+
+    def do(self, scene) -> None:
+        self._restore = [(scene.guides.index(g), g)
+                         for g in self._guides if g in scene.guides]
+        for g in self._guides:
+            if g in scene.guides:
+                scene.guides.remove(g)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for i, g in sorted(self._restore):
+            scene.guides.insert(i, g)
+        scene.version += 1
+
+
 class AddGeoPathCommand(Command):
     """Add a traced georef path to ``scene.geo_paths`` (Track G)."""
 

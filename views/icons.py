@@ -201,6 +201,34 @@ def _pan(p, ink):
     _move(p, ink)
 
 
+def _eraser(p, ink):
+    # A tilted eraser block with a swipe line under it.
+    p.save()
+    p.translate(24, 22)
+    p.rotate(-35)
+    p.setBrush(Qt.NoBrush)
+    p.drawRect(QRectF(-11, -6, 22, 12))
+    p.drawLine(QPointF(-3, -6), QPointF(-3, 6))   # the sleeve
+    p.restore()
+    pen = p.pen()
+    pen.setStyle(Qt.DashLine)
+    p.setPen(pen)
+    p.drawLine(QPointF(12, 38), QPointF(36, 38))
+    pen.setStyle(Qt.SolidLine)
+    p.setPen(pen)
+
+
+def _tape(p, ink):
+    # A tape-measure body with the tape pulled out and a hook.
+    p.setBrush(Qt.NoBrush)
+    p.drawEllipse(QPointF(18, 20), 8.5, 8.5)
+    p.drawEllipse(QPointF(18, 20), 2.6, 2.6)
+    p.drawLine(QPointF(18, 28.5), QPointF(38, 28.5))   # the tape
+    p.drawLine(QPointF(38, 25.5), QPointF(38, 31.5))   # end hook
+    for x in (24, 29, 34):                              # tick marks
+        p.drawLine(QPointF(x, 28.5), QPointF(x, 25.8))
+
+
 def _zoom_extents(p, ink):
     # Corner brackets framing the extent (fit-to-view).
     for (cx, cy, sx, sy) in ((13, 13, 1, 1), (35, 13, -1, 1),
@@ -268,6 +296,7 @@ _DRAW = {
     "arc": _arc, "arc3": _arc3, "pushpull": _pushpull, "offset": _offset,
     "move": _move, "paint": _paint, "dimension": _dimension,
     "geopath": _geopath, "orbit": _orbit, "pan": _pan,
+    "eraser": _eraser, "tape": _tape,
     "zoom_extents": _zoom_extents, "view_iso": _view_iso,
     # Standard views — solid face = near, hollow face = opposite.
     "view_top": _view_cube("top", True),

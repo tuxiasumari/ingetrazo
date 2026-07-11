@@ -38,8 +38,10 @@ from formats import stl as stl_format
 from tools.arc import ArcTool, ThreePointArcTool
 from tools.circle import CircleTool, PolygonTool
 from tools.dimension import DimensionTool
+from tools.eraser import EraserTool
 from tools.geopath import GeoPathTool
 from tools.line import LineTool
+from tools.tape import TapeMeasureTool
 from tools.move import MoveTool
 from tools.rotated_rectangle import RotatedRectangleTool
 from tools.offset import OffsetTool
@@ -77,6 +79,8 @@ class MainWindow(QMainWindow):
             "move": MoveTool(),
             "paint": PaintTool(),
             "dimension": DimensionTool(),
+            "eraser": EraserTool(),
+            "tape": TapeMeasureTool(),
             # Georef trace (Track G) — draws a GeoPath, never mesh geometry.
             "geopath": GeoPathTool(),
         }
@@ -164,12 +168,12 @@ class MainWindow(QMainWindow):
 
         # One toolbar per task, each independently movable (SketchUp).
         layout = [
-            ("main", tr("Main"), ["select", "paint"]),
+            ("main", tr("Main"), ["select", "eraser", "paint"]),
             ("draw", tr("Draw"),
              ["line", "rectangle", "rotated_rect", "circle", "polygon",
               "arc", "arc3"]),
             ("modify", tr("Modify"), ["move", "pushpull", "offset"]),
-            ("annotate", tr("Annotate"), ["dimension", "geopath"]),
+            ("annotate", tr("Annotate"), ["tape", "dimension", "geopath"]),
         ]
         for oname, title, keys in layout:
             tb = self._new_toolbar(title, oname)
@@ -278,6 +282,10 @@ class MainWindow(QMainWindow):
         convert_path_action = QAction(tr("Convert Path to Geometry"), self)
         convert_path_action.triggered.connect(self._on_convert_geopath)
         edit_menu.addAction(convert_path_action)
+
+        delete_guides_action = QAction(tr("Delete Guides"), self)
+        delete_guides_action.triggered.connect(self._on_delete_guides)
+        edit_menu.addAction(delete_guides_action)
 
         edit_menu.addSeparator()
 
@@ -581,6 +589,14 @@ class MainWindow(QMainWindow):
         cmd = cmds[0] if len(cmds) == 1 else CompoundCommand(cmds)
         self.viewport.history.execute(cmd)
         self.viewport.update()
+
+    def _on_delete_guides(self) -> None:
+        """Remove every construction guide (SketchUp's Edit ▸ Delete Guides)."""
+        from core.history import DeleteGuidesCommand
+        guides = list(self.viewport.scene.guides)
+        if guides:
+            self.viewport.history.execute(DeleteGuidesCommand(guides))
+            self.viewport.update()
 
     def _on_toggle_path_closed(self) -> None:
         from georef.geopath import GeoPath

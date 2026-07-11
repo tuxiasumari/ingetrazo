@@ -209,6 +209,11 @@
   "OpenStreetMap (streets)": "OpenStreetMap (calles)",
 
   "Path": "Ruta",
+  "Tape Measure": "Medir",
+  "Eraser": "Borrador",
+  "Distance: {d} m": "Distancia: {d} m",
+  "Guide at {d} m": "Guía a {d} m",
+  "Delete Guides": "Eliminar guías",
   "Import georef (KML / GeoJSON)…": "Importar georref (KML / GeoJSON)…",
   "Import georef": "Importar georref",
   "Import failed": "Falló la importación",
