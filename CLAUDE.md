@@ -255,7 +255,17 @@ Tras el fix de raíz se auditó el push/pull contra SketchUp (el usuario es ex-u
 
 - ⑧ **Regla de crease + dedup de caras (2026-06-10).** Auditando "¿qué falta para roca sólida?" se encontró y arregló un **crash real del flujo de planta** (levantar la 2ª de dos habitaciones que comparten muro → `IndexError`: el push reconstruía el muro compartido como duplicado idéntico y el merge de dos ciclos idénticos no tiene frontera que trazar). Fix triple: `dissolve_coplanar_region` dedupea ciclos idénticos en vez de crashear; **regla de crease** (una arista que carga una cara no-coplanar es estructural — nunca se fusiona a través de ella) en el merge fase 3 **y** en la unión del rebuild (`keep_keys`) → dos techos sobre un muro divisorio quedan **dos caras con ridge visible**, como SketchUp, no una losa flotando sobre el muro; `mesh.dedupe_faces()` como paso propio de la fase 0 del stitch. Test del flujo completo en `test_two_room_plan_raises_cleanly`.
 
-### 🎯 PRÓXIMA SESIÓN — PENDIENTE (actualizado 2026-07-05)
+### 🎯 PRÓXIMA SESIÓN — PENDIENTE (actualizado 2026-07-11)
+
+> **Sesiones 2026-07-09..11 (dogfooding intensivo del usuario — curvas, intersecciones, push en dibujos mixtos). Pusheado a `main`. 709 tests verdes + fuzz 996/4 estable en cada cambio.** Clases enteras cerradas, cada una con archivo-repro del usuario y test de regresión:
+> - **Huecos anidados** filtrados en `mesh.add_face` (choke point universal): mataba earcut (cuñas fantasma del `ojo.igz`) y engañaba a `is_closed` → el guard ahora rechaza esa clase; archivos viejos se auto-limpian al cargar.
+> - **Arrangement por plano acotado** (`RebuildPlaneFacesCommand`, semántica de cobertura, sin resucitar caras): intersecciones círculo×recta / círculo×círculo / rect×rect funcionan en escenas CON sólidos 3D (antes el gate "todo plano" se apagaba) y sobre caras de sólidos. Rect×rect = 3 regiones (SketchUp).
+> - **Identidad de curva**: copy/paste y Offset preservan/reetiquetan curve ids (ids frescos por copia); undo del Offset exacto (SnapshotCompound — antes filtraba aristas).
+> - **History transaccional**: comando que lanza excepción → rollback + aviso en status + `ingetrazo-errors.log` (el `aas.igz` quedó a medio commit con la excepción tragada por Qt).
+> - **`was_solid` por REGIÓN** (kinds coplanares + componente abierto, robusto a T-junctions vía `classify_push_edge`): push de una región de hoja con un sólido en escena ya no borra los vecinos (`xc.igz`).
+> - **Perf del drag preview 3×** (269→76 ms en el ojo): orient 1× por drag (`_drag_pre_oriented`), orient final diferido al commit, normales memoizadas en `_coplanar_component`. Perf de fondo sigue siendo el índice espacial (pendiente conocido).
+> - **Drag rechazado se topa** en la última altura buena (clamp estilo SketchUp + mensaje) en vez de "desaparecer". **Aterrizaje a ras** (iris al nivel del anillo) sigue siendo brecha A.3 — determinístico y asimétrico: **empujar el interior PRIMERO funciona**; exterior-primero se digiere y se rechaza fail-safe.
+> - Archivos `.igz` de repro del usuario (ojo/circo/aas/rect/xc) quedan sin trackear en la raíz (scratch, no van al repo público).
 
 > **Sesión 2026-07-05 (estratégica + repo público + i18n). Todo pusheado a `main` (`0881ee6`). 568 tests verdes.** Lo hecho, no-código salvo i18n:
 > - **Repo hecho PÚBLICO** (`github.com/tuxiasumari/ingetrazo`, antes estaba **privado** — la nota vieja que lo daba por público era falsa, verificado por API). Escaneo de secretos (limpio) → push → visibilidad pública.
