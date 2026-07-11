@@ -151,6 +151,17 @@ def _center_arc(p, ink):
     _dot(p, 17, 12, 2.6)
 
 
+
+def _scale(p, ink):
+    # A small square growing to a large one along a diagonal arrow.
+    p.setBrush(Qt.NoBrush)
+    p.drawRect(QRectF(11, 27, 10, 10))
+    p.drawRect(QRectF(17, 11, 20, 20))
+    p.drawLine(QPointF(14, 34), QPointF(33, 15))
+    p.drawLine(QPointF(33, 15), QPointF(27, 15))
+    p.drawLine(QPointF(33, 15), QPointF(33, 21))
+
+
 def _pushpull(p, ink):
     # A face with an up arrow (extrude).
     p.setBrush(Qt.NoBrush)
@@ -313,7 +324,7 @@ _DRAW = {
     "select": _select, "line": _line, "rectangle": _rectangle,
     "rotated_rect": _rotated_rect, "circle": _circle, "polygon": _polygon,
     "arc": _arc, "arc3": _arc3, "center_arc": _center_arc,
-    "rotate": _rotate, "pushpull": _pushpull, "offset": _offset,
+    "rotate": _rotate, "scale": _scale, "pushpull": _pushpull, "offset": _offset,
     "move": _move, "paint": _paint, "dimension": _dimension,
     "geopath": _geopath, "orbit": _orbit, "pan": _pan,
     "eraser": _eraser, "tape": _tape,

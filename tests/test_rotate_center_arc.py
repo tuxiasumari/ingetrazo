@@ -178,3 +178,71 @@ def test_center_arc_typed_angle_and_circle_weld():
     _hover(vp, t, 1, 1)                            # counter-clockwise side
     assert t.on_value(vp, 90.0) is True
     assert len(scene.mesh.vertices) == verts_before   # welded, no duplicates
+
+
+def test_scale_selection_doubles_about_anchor():
+    from tools.scale import ScaleTool
+
+    scene = Scene()
+    vp = _Vp(scene)
+    _rect(scene, vp.history, 2, 0, 6, 2)
+    scene.selection.update(scene.mesh.faces)
+    scene.selection.update(scene.mesh.edges)
+    before = _keys(scene.mesh)
+    t = ScaleTool()
+    t.on_activate(vp)
+    _click(vp, t, 0, 0)                            # anchor at the origin
+    _click(vp, t, 1, 0)                            # reference distance 1.0
+    _hover(vp, t, 2, 0)                            # live ×2
+    _click(vp, t, 2, 0)                            # commit ×2
+    got = _keys(scene.mesh)
+    assert (4.0, 0.0, 0.0) in got and (12.0, 4.0, 0.0) in got
+    assert vp.history.undo()
+    assert _keys(scene.mesh) == before
+    assert vp.history.redo()
+    assert _keys(scene.mesh) == got
+
+
+def test_scale_typed_factor_and_mirror():
+    from tools.scale import ScaleTool
+
+    scene = Scene()
+    vp = _Vp(scene)
+    _rect(scene, vp.history, 2, 0, 6, 2)
+    scene.selection.update(scene.mesh.faces)
+    scene.selection.update(scene.mesh.edges)
+    t = ScaleTool()
+    t.on_activate(vp)
+    _click(vp, t, 0, 0)
+    _click(vp, t, 1, 0)
+    _hover(vp, t, 1.5, 0)
+    assert t.on_value(vp, -1.0) is True            # mirror through the anchor
+    got = _keys(scene.mesh)
+    assert (-2.0, 0.0, 0.0) in got and (-6.0, -2.0, 0.0) in got
+    assert len(scene.mesh.faces) == 1              # still one clean face
+
+
+def test_scale_group_as_unit():
+    from tools.scale import ScaleTool
+
+    scene = Scene()
+    vp = _Vp(scene)
+    _rect(scene, vp.history, 2, 0, 6, 2)
+    vp.history.execute(MakeGroupCommand(list(scene.mesh.faces),
+                                        list(scene.mesh.edges)))
+    group = scene.groups[0]
+    scene.selection.clear()
+    scene.selection.add(group)
+    t = ScaleTool()
+    t.on_activate(vp)
+    _click(vp, t, 2, 0)                            # anchor on the slab corner
+    _click(vp, t, 3, 0)
+    _hover(vp, t, 3.5, 0)
+    _click(vp, t, 3.5, 0)                          # ×1.5 about (2,0)
+    gk = sorted((round(v.position.x(), 3), round(v.position.y(), 3))
+                for v in group.mesh.vertices)
+    assert (2.0, 0.0) in gk and (8.0, 3.0) in gk   # corner fixed, far corner ×1.5
+    vp.history.undo()
+    assert (6.0, 2.0) in sorted((round(v.position.x(), 3),
+                                 round(v.position.y(), 3))
+                                for v in group.mesh.vertices)

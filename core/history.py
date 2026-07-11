@@ -807,6 +807,78 @@ class RotateGroupCommand(Command):
             scene.version += 1
 
 
+def scale_matrix(center: QVector3D, factor: float):
+    """Uniform scale by ``factor`` about ``center``. A negative factor mirrors
+    through the centre (SketchUp allows it)."""
+    from PySide6.QtGui import QMatrix4x4
+    m = QMatrix4x4()
+    m.translate(center)
+    m.scale(factor)
+    m.translate(-center)
+    return m
+
+
+class ScaleVerticesCommand(Command):
+    """Uniformly scale every shared vertex at a set of positions about
+    ``center`` by ``factor``, then autofold (scaling a subset of connected
+    geometry can warp attached faces). Snapshot undo/redo — the mirror of
+    Move/RotateVerticesCommand."""
+
+    def __init__(self, positions: Iterable[QVector3D], center: QVector3D,
+                 factor: float) -> None:
+        self.src = [QVector3D(p) for p in positions]
+        self.center = QVector3D(center)
+        self.factor = factor
+        self._before: Optional[dict] = None
+        self._after: Optional[dict] = None
+
+    def do(self, scene) -> None:
+        if self._after is not None:  # redo
+            scene.mesh.restore_state(self._after)
+            scene.version += 1
+            return
+        self._before = scene.mesh.capture_state()
+        m = scale_matrix(self.center, self.factor)
+        rotate_points(scene, {_key(p) for p in self.src}, m)  # generic mapper
+        fold_nonplanar_faces(scene.mesh)
+        self._after = scene.mesh.capture_state()
+
+    def undo(self, scene) -> None:
+        if self._before is not None:
+            scene.mesh.restore_state(self._before)
+            scene.version += 1
+
+
+class ScaleGroupCommand(Command):
+    """Uniformly scale a whole group's isolated mesh about ``center``.
+    Snapshot undo/redo on the group's own mesh."""
+
+    def __init__(self, group, center: QVector3D, factor: float) -> None:
+        self.group = group
+        self.center = QVector3D(center)
+        self.factor = factor
+        self._before: Optional[dict] = None
+        self._after: Optional[dict] = None
+
+    def do(self, scene) -> None:
+        gmesh = self.group.mesh
+        if self._after is not None:  # redo
+            gmesh.restore_state(self._after)
+            scene.version += 1
+            return
+        self._before = gmesh.capture_state()
+        m = scale_matrix(self.center, self.factor)
+        for v in list(gmesh.vertices):
+            gmesh.move_vertex(v, m.map(v.position) - v.position)
+        self._after = gmesh.capture_state()
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self._before is not None:
+            self.group.mesh.restore_state(self._before)
+            scene.version += 1
+
+
 class PruneOrphanEdgesCommand(Command):
     """Remove edges incident to ``vertices`` that, once the rest of a compound
     has run, border no face — the dangling lines left where push/pull carved

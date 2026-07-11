@@ -44,6 +44,7 @@ from tools.line import LineTool
 from tools.tape import TapeMeasureTool
 from tools.move import MoveTool
 from tools.rotate import RotateTool
+from tools.scale import ScaleTool
 from tools.rotated_rectangle import RotatedRectangleTool
 from tools.offset import OffsetTool
 from tools.paint import PaintTool
@@ -80,6 +81,7 @@ class MainWindow(QMainWindow):
             "offset": OffsetTool(),
             "move": MoveTool(),
             "rotate": RotateTool(),
+            "scale": ScaleTool(),
             "paint": PaintTool(),
             "dimension": DimensionTool(),
             "eraser": EraserTool(),
@@ -175,7 +177,7 @@ class MainWindow(QMainWindow):
             ("draw", tr("Draw"),
              ["line", "rectangle", "rotated_rect", "circle", "polygon",
               "arc", "arc3", "center_arc"]),
-            ("modify", tr("Modify"), ["move", "rotate", "pushpull", "offset"]),
+            ("modify", tr("Modify"), ["move", "rotate", "scale", "pushpull", "offset"]),
             ("annotate", tr("Annotate"), ["tape", "dimension", "geopath"]),
         ]
         for oname, title, keys in layout:
@@ -184,10 +186,11 @@ class MainWindow(QMainWindow):
             for key in keys:
                 self._add_tool_button(tb, key)
 
-        # Spacebar returns to Select, like SketchUp's pointer. Keep "S" too.
+        # Spacebar returns to Select, like SketchUp's pointer ("S" now
+        # belongs to Scale, matching SketchUp).
         select_action = self._tool_actions["select"]
-        select_action.setShortcuts([QKeySequence("S"), QKeySequence(Qt.Key_Space)])
-        select_action.setToolTip(tr("Select (Space / S)"))
+        select_action.setShortcuts([QKeySequence(Qt.Key_Space)])
+        select_action.setToolTip(tr("Select (Space)"))
 
         # View toolbar: camera nav (Orbit / Pan) + Zoom Extents + iso view.
         view_tb = self._new_toolbar(tr("View"), "view")

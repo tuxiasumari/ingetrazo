@@ -57,7 +57,7 @@ def _seg_rect_overlap(a, b, rect) -> bool:
 
 class SelectTool(Tool):
     name = "Select"
-    shortcut = "S"
+    shortcut = ""  # Space, bound in main_window; "S" is Scale
     uses_snap = False  # selecting picks geometry; no snap markers
     box_select = True   # supports the rubber-band window / crossing box
 
