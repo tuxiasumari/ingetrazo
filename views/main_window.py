@@ -470,6 +470,10 @@ class MainWindow(QMainWindow):
         person2d = QAction(tr("Person (2D, faces the camera)"), self)
         person2d.triggered.connect(self._on_insert_person_2d)
         components_menu.addAction(person2d)
+        person_sil = QAction(tr("Person (silhouette)"), self)
+        person_sil.triggered.connect(
+            lambda: self._on_insert_person_2d("person_silhouette.png"))
+        components_menu.addAction(person_sil)
         for key, label in (("person", tr("Person 3D")),
                            ("tree", tr("Tree")),
                            ("bush", tr("Bush")),
@@ -1048,12 +1052,12 @@ class MainWindow(QMainWindow):
         scene.version += 1
         self._saved_version = scene.version
 
-    def _make_billboard_person(self):
-        """The face-me scale figure (arch-viz silhouette, 1.75 m)."""
+    def _make_billboard_person(self, image: str = "person_billboard.png"):
+        """The face-me scale figure (arch-viz cutout, 1.75 m)."""
         from PySide6.QtGui import QImage
         from core.group import make_billboard_group
         path = (Path(__file__).resolve().parent.parent / "resources"
-                / "components" / "person_billboard.png")
+                / "components" / image)
         if not path.exists():
             return None
         img = QImage(str(path))
@@ -1062,10 +1066,10 @@ class MainWindow(QMainWindow):
         return make_billboard_group(str(path), 1.75, tr("Person"),
                                     img.width() / img.height())
 
-    def _on_insert_person_2d(self) -> None:
+    def _on_insert_person_2d(self, image: str = "person_billboard.png") -> None:
         from core.history import InsertGroupCommand
         self.viewport.end_group_edit()
-        group = self._make_billboard_person()
+        group = self._make_billboard_person(image)
         if group is None:
             QMessageBox.warning(self, tr("Insert component"),
                                 tr("Component file missing: {p}",
