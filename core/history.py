@@ -60,15 +60,54 @@ class Command(ABC):
 
 
 class History:
+    """Undo/redo stacks. ``execute`` is TRANSACTIONAL: if a command throws
+    mid-mutation, the mesh is restored to its pre-command state, the failure
+    is logged (stderr + ``error_log`` file), and nothing lands on the undo
+    stack — a failed operation must be a no-op, never a half-committed mess
+    (an aas.igz-style aborted draw left a quarter circle, an unsplit face and
+    a duplicated edge behind, with the traceback swallowed by the Qt event
+    loop). Same fail-safe doctrine as the BIM push guard, one level up."""
+
+    #: Where failed-command tracebacks are appended (project-local, so the
+    #: user can just send the file when reporting a bug).
+    error_log = "ingetrazo-errors.log"
+
     def __init__(self, scene) -> None:
         self.scene = scene
         self.undo_stack: list[Command] = []
         self.redo_stack: list[Command] = []
+        #: Message describing the last rolled-back failure (UI may flash it).
+        self.last_error: Optional[str] = None
 
     def execute(self, cmd: Command) -> None:
-        cmd.do(self.scene)
+        snapshot = self.scene.mesh.capture_state()
+        try:
+            cmd.do(self.scene)
+        except Exception as exc:
+            self.scene.mesh.restore_state(snapshot)
+            self.scene.selection.clear()
+            self.scene.version += 1
+            self.last_error = f"{type(cmd).__name__}: {exc}"
+            self._log_failure(cmd, exc)
+            return
+        self.last_error = None
         self.undo_stack.append(cmd)
         self.redo_stack.clear()
+
+    def _log_failure(self, cmd: Command, exc: Exception) -> None:
+        import datetime
+        import sys
+        import traceback
+
+        text = (f"[{datetime.datetime.now().isoformat(timespec='seconds')}] "
+                f"command {type(cmd).__name__} failed and was rolled back:\n"
+                f"{''.join(traceback.format_exception(exc))}\n")
+        print(text, file=sys.stderr)
+        try:
+            with open(self.error_log, "a", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError:
+            pass
 
     def undo(self) -> bool:
         if not self.undo_stack:

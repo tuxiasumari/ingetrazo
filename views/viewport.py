@@ -2421,6 +2421,12 @@ class Viewport(QOpenGLWidget):
             # Any pending typed value is invalidated once the user
             # commits a point with the mouse.
             self._set_value_buffer("")
+            # A command that failed was rolled back (History is
+            # transactional) — surface it instead of failing silently.
+            if self.history.last_error:
+                self.flash_status(
+                    tr("Operation failed and was undone: {err}",
+                       err=self.history.last_error), 8000)
             self.update()
 
     def mouseDoubleClickEvent(self, ev) -> None:
