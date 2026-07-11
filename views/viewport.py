@@ -407,6 +407,7 @@ class Viewport(QOpenGLWidget):
         self._sel_faces_vao, self._sel_faces_vbo = self._create_dynamic()
         self._faces_vao, self._faces_vbo = self._create_dynamic()
         self._tex_faces_vao, self._tex_faces_vbo = self._create_dynamic_uv()
+        self._billboard_vao, self._billboard_vbo = self._create_dynamic_uv()
         self._hover_faces_vao, self._hover_faces_vbo = self._create_dynamic()
         self._hover_edges_vao, self._hover_edges_vbo = self._create_dynamic()
         self._silhouette_vao, self._silhouette_vbo = self._create_dynamic()
@@ -528,6 +529,10 @@ class Viewport(QOpenGLWidget):
             self._tex_faces_vao.release()
             self._program.setUniformValue(self._loc_use_tex, 0)
             self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
+
+        # Face-me billboards (SketchUp 2D people): per-frame textured cutout
+        # quads turned toward the camera.
+        self._draw_billboards()
 
         # Face highlights (selection + hover) — translucent overlays drawn on
         # top of the cream faces. Same polygon offset as the faces so they sit
@@ -1216,6 +1221,77 @@ class Viewport(QOpenGLWidget):
                     QVector3D.dotProduct(p, u_axis) / sw,
                     QVector3D.dotProduct(p, v_axis) / sh,
                 ])
+
+    def _billboard_quad(self, group):
+        """The face-me quad of a billboard group, rotated around its vertical
+        anchor axis to face the camera NOW. Returns (corners[4], tex_path) or
+        ``None``. Shared by the render pass and picking so what you see is
+        what you click."""
+        verts = group.mesh.vertices
+        if not verts:
+            return None
+        xs = [v.position.x() for v in verts]
+        ys = [v.position.y() for v in verts]
+        zs = [v.position.z() for v in verts]
+        anchor = QVector3D((min(xs) + max(xs)) / 2,
+                           (min(ys) + max(ys)) / 2, min(zs))
+        w = max(max(xs) - min(xs), max(ys) - min(ys))
+        h = max(zs) - min(zs)
+        tex = None
+        for f in group.mesh.faces:
+            t = f.attrs.get("texture")
+            if t and t.get("path"):
+                tex = t["path"]
+                break
+        if tex is None or w < 1e-9 or h < 1e-9:
+            return None
+        d = self.camera.eye() - anchor
+        d.setZ(0.0)
+        if d.length() < 1e-6:
+            d = QVector3D(1.0, 0.0, 0.0)
+        d = d.normalized()
+        r = QVector3D(-d.y(), d.x(), 0.0)
+        up = QVector3D(0.0, 0.0, 1.0)
+        c0 = anchor - r * (w / 2)
+        c1 = anchor + r * (w / 2)
+        return ([c0, c1, c1 + up * h, c0 + up * h], tex)
+
+    def _draw_billboards(self) -> None:
+        """Per-frame pass: each face-me billboard is a textured cutout quad
+        turned toward the camera (SketchUp's 2D people). Depth-tested, so it
+        hides behind walls correctly; the shader discards transparent texels."""
+        groups = [g for g in self.scene.groups
+                  if getattr(g, "billboard", False)
+                  and self.scene.entity_visible(g)]
+        if not groups:
+            return
+        self._program.setUniformValue(self._loc_use_tex, 1)
+        self._billboard_vao.bind()
+        for g in groups:
+            quad = self._billboard_quad(g)
+            if quad is None:
+                continue
+            corners, path = quad
+            tex = self._get_texture(path)
+            if tex is None:
+                continue
+            data = array("f")
+            uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            for idx in (0, 1, 2, 0, 2, 3):
+                c = corners[idx]
+                u, v = uvs[idx]
+                data.extend([c.x(), c.y(), c.z(), u, v])
+            raw = data.tobytes()
+            self._billboard_vbo.bind()
+            self._billboard_vbo.allocate(raw, len(raw))
+            self._billboard_vbo.release()
+            tex.bind(0)
+            self._gl.glDrawArrays(GL_TRIANGLES, 0, 6)
+            if g in self.scene.selection:
+                # Selection cue: repaint with the highlight colour untextured.
+                pass
+        self._billboard_vao.release()
+        self._program.setUniformValue(self._loc_use_tex, 0)
 
     def _upload_hover_face(self, face: Face) -> int:
         """Triangulate ``face`` into the hover-faces VBO. Returns vertex count."""
@@ -2349,6 +2425,15 @@ class Viewport(QOpenGLWidget):
             for g in self.scene.groups:
                 if not self.scene.entity_selectable(g):
                     continue                    # hidden or locked layer
+                if getattr(g, "billboard", False):
+                    quad = self._billboard_quad(g)
+                    if quad is not None:
+                        c = quad[0]
+                        for tri in ((c[0], c[1], c[2]), (c[0], c[2], c[3])):
+                            t = _ray_triangle(origin, direction, *tri)
+                            if t is not None and (best is None or t < best[0]):
+                                best = (t, g)
+                    continue
                 for face in g.mesh.faces:
                     for t0, t1, t2 in face.triangulate():
                         t = _ray_triangle(origin, direction, t0, t1, t2)

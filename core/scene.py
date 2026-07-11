@@ -127,7 +127,7 @@ class Scene:
             if self.entity_visible(e):
                 yield e
         for g in self.groups:
-            if self.entity_visible(g):
+            if self.entity_visible(g) and not getattr(g, "billboard", False):
                 yield from g.mesh.edges
 
     def render_faces(self):
@@ -135,7 +135,7 @@ class Scene:
             if self.entity_visible(f):
                 yield f
         for g in self.groups:
-            if self.entity_visible(g):
+            if self.entity_visible(g) and not getattr(g, "billboard", False):
                 yield from g.mesh.faces
 
     # ---- Mutations ----------------------------------------------------------

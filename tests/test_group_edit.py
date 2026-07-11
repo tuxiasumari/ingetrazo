@@ -112,3 +112,49 @@ def test_bundled_components_import_closed_and_insert_undoably():
     assert abs(max(zs) - 1.75) < 1e-6 and abs(min(zs)) < 1e-6
     assert hist.undo() and len(scene.groups) == 3
     assert hist.redo() and len(scene.groups) == 4
+
+
+def test_billboard_group_round_trips_and_faces_camera(tmp_path):
+    # Face-me billboards: flag + textured quad persist in .igz; the quad the
+    # viewport computes always faces the camera around the vertical axis.
+    from core.group import make_billboard_group
+    from formats import igz
+
+    scene = Scene()
+    g = make_billboard_group("person_billboard.png", 1.75, "Persona", 0.28)
+    scene.groups.append(g)
+    assert g.billboard
+    # excluded from the static render views (drawn per-frame instead)
+    assert list(scene.render_faces()) == []
+    p = tmp_path / "bb.igz"
+    igz.save_scene(scene, p)
+    scene2 = Scene()
+    igz.load_into(scene2, p)
+    g2 = scene2.groups[0]
+    assert g2.billboard
+    tex = g2.mesh.faces[0].attrs["texture"]
+    assert tex["path"].endswith("person_billboard.png")
+
+    # quad math: a stub viewport with a camera at two azimuths
+    class _Cam:
+        def __init__(self, eye):
+            self._eye = eye
+
+        def eye(self):
+            return self._eye
+
+    class _VpB:
+        def __init__(self, scene, eye):
+            self.scene = scene
+            self.camera = _Cam(eye)
+
+    from views.viewport import Viewport
+    for eye, expect_normal in ((QVector3D(10, 0, 1), QVector3D(1, 0, 0)),
+                               (QVector3D(0, -8, 1), QVector3D(0, -1, 0))):
+        vp = _VpB(scene2, eye)
+        corners, _path = Viewport._billboard_quad(vp, g2)
+        n = QVector3D.crossProduct(corners[1] - corners[0],
+                                   corners[3] - corners[0]).normalized()
+        assert QVector3D.dotProduct(n, expect_normal) > 0.99 or \
+            QVector3D.dotProduct(-n, expect_normal) > 0.99
+        assert abs((corners[3] - corners[0]).z() - 1.75) < 1e-6

@@ -94,6 +94,8 @@ def save_scene(scene, path: Path) -> None:
                 entry["layer"] = g.layer
             if getattr(g, "ifc", None):
                 entry["ifc"] = dict(g.ifc)
+            if getattr(g, "billboard", False):
+                entry["billboard"] = True
             payload["groups"].append(entry)
     layers = getattr(scene, "layers", None)
     if layers is not None and (len(layers) > 1 or any(
@@ -160,6 +162,8 @@ def load_into(scene, path: Path) -> None:
             group.layer = raw["layer"]
         if raw.get("ifc"):
             group.ifc = dict(raw["ifc"])
+        if raw.get("billboard"):
+            group.billboard = True
         scene.groups.append(group)
 
     for raw in payload.get("dimensions", []):

@@ -467,7 +467,10 @@ class MainWindow(QMainWindow):
         actions.append(import_obj_action)
 
         components_menu = QMenu(tr("Insert component"), self)
-        for key, label in (("person", tr("Person (1.75 m scale figure)")),
+        person2d = QAction(tr("Person (2D, faces the camera)"), self)
+        person2d.triggered.connect(self._on_insert_person_2d)
+        components_menu.addAction(person2d)
+        for key, label in (("person", tr("Person 3D")),
                            ("tree", tr("Tree")),
                            ("bush", tr("Bush")),
                            ("car", tr("Car"))):
@@ -1037,22 +1040,42 @@ class MainWindow(QMainWindow):
         """Place the 1.75 m scale figure near the origin in a fresh document,
         SketchUp-style. A plain group — select and Delete removes it. Added
         outside the undo history and without dirtying the document."""
-        from core.group import Group
-        from core.scene import Scene as _Scene
-        from formats import obj as _obj
-        path = (Path(__file__).resolve().parent.parent / "resources"
-                / "components" / "person.obj")
-        if not path.exists():
-            return
-        temp = _Scene()
-        try:
-            _obj.load_obj(temp, path)
-        except Exception:  # noqa: BLE001 — a broken asset must not block startup
+        group = self._make_billboard_person()
+        if group is None:
             return
         scene = self.viewport.scene
-        scene.groups.append(Group(temp.mesh, name=tr("Person")))
+        scene.groups.append(group)
         scene.version += 1
         self._saved_version = scene.version
+
+    def _make_billboard_person(self):
+        """The face-me scale figure (arch-viz silhouette, 1.75 m)."""
+        from PySide6.QtGui import QImage
+        from core.group import make_billboard_group
+        path = (Path(__file__).resolve().parent.parent / "resources"
+                / "components" / "person_billboard.png")
+        if not path.exists():
+            return None
+        img = QImage(str(path))
+        if img.isNull() or img.height() == 0:
+            return None
+        return make_billboard_group(str(path), 1.75, tr("Person"),
+                                    img.width() / img.height())
+
+    def _on_insert_person_2d(self) -> None:
+        from core.history import InsertGroupCommand
+        self.viewport.end_group_edit()
+        group = self._make_billboard_person()
+        if group is None:
+            QMessageBox.warning(self, tr("Insert component"),
+                                tr("Component file missing: {p}",
+                                   p="person_billboard.png"))
+            return
+        self.viewport.history.execute(InsertGroupCommand(group))
+        self._activate_tool("move")
+        self.viewport.flash_status(
+            tr("Component inserted at the origin — Move (M) places it"), 4000)
+        self.viewport.update()
 
     def _on_insert_component(self, key: str) -> None:
         """Insert a bundled starter component as a Group at the origin,
