@@ -1266,9 +1266,12 @@ class MakeGroupCommand(Command):
 
     def __init__(self, faces: Iterable[Face], edges: Iterable[Edge]) -> None:
         faces = list(faces)
+        # Attrs (colour, texture, layer, IFC tag) must travel into the group's
+        # fresh mesh with each face — grouping a painted set used to strip it.
         self._face_loops = [
             ([QVector3D(v) for v in f.vertices],
-             [[QVector3D(v) for v in h] for h in f.holes])
+             [[QVector3D(v) for v in h] for h in f.holes],
+             dict(f.attrs))
             for f in faces
         ]
         self._edge_ends = [(QVector3D(e.a), QVector3D(e.b)) for e in edges]
@@ -1301,9 +1304,11 @@ class MakeGroupCommand(Command):
         self.snapshot = m.capture_state()
         # The group is a fresh copy built from the captured positions.
         gmesh = Mesh()
-        for loop, holes in self._face_loops:
-            gmesh.add_face([QVector3D(p) for p in loop],
-                           [[QVector3D(p) for p in h] for h in holes] or None)
+        for loop, holes, attrs in self._face_loops:
+            gf = gmesh.add_face([QVector3D(p) for p in loop],
+                                [[QVector3D(p) for p in h] for h in holes] or None)
+            if attrs:
+                gf.attrs.update(attrs)
         for a, b in self._edge_ends:
             gmesh.add_edge(QVector3D(a), QVector3D(b))
         for a, b, soft, curve in self._flagged:
@@ -1315,12 +1320,12 @@ class MakeGroupCommand(Command):
         self.group = Group(gmesh)
         # Remove the grouped geometry from the loose mesh.
         face_keysets = [frozenset(_key(p) for p in loop)
-                        for loop, _ in self._face_loops]
+                        for loop, _h, _a in self._face_loops]
         for f in list(m.faces):
             if frozenset(_key(p) for p in f.vertices) in face_keysets:
                 m.remove_face(f)
                 scene.selection.discard(f)
-        grouped = {_key(p) for loop, holes in self._face_loops
+        grouped = {_key(p) for loop, holes, _a in self._face_loops
                    for lst in (loop, *holes) for p in lst}
         sel_edges = {frozenset((_key(a), _key(b))) for a, b in self._edge_ends}
         for e in list(m.edges):
@@ -1376,8 +1381,10 @@ class ExplodeGroupCommand(Command):
         self.snapshot = m.capture_state()
         self.index = scene.groups.index(self.group)
         for f in self.group.mesh.faces:
-            m.add_face([QVector3D(v) for v in f.vertices],
-                       [[QVector3D(v) for v in h] for h in f.holes] or None)
+            nf = m.add_face([QVector3D(v) for v in f.vertices],
+                            [[QVector3D(v) for v in h] for h in f.holes] or None)
+            if f.attrs:
+                nf.attrs.update(dict(f.attrs))   # colour/texture travel back out
         for e in self.group.mesh.edges:
             v0, v1 = m.vertex_at(e.a), m.vertex_at(e.b)
             if v0 is None or v1 is None or m.find_edge(v0, v1) is None:

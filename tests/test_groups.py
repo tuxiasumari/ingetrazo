@@ -136,3 +136,20 @@ def test_group_keeps_soft_and_curve_flags_round_trip(tmp_path):
     assert sum(1 for e in scene.mesh.edges if e.soft) == soft_before
     assert sum(1 for e in scene.mesh.edges
                if e.curve is not None) == curve_before
+
+
+def test_group_keeps_face_attrs_round_trip():
+    # Colour + texture painted on faces must survive Make Group and travel
+    # back out on Explode (user report 2026-07-12: grouping a textured plaza
+    # stripped every material).
+    scene, hist, a = _two_squares()
+    a.attrs["color"] = [0.8, 0.2, 0.1]
+    a.attrs["texture"] = {"path": "brick.png", "sw": 1.0, "sh": 1.0}
+    hist.execute(MakeGroupCommand([a], []))
+    gf = scene.groups[0].mesh.faces[0]
+    assert gf.attrs.get("color") == [0.8, 0.2, 0.1]
+    assert gf.attrs.get("texture") == {"path": "brick.png", "sw": 1.0, "sh": 1.0}
+    hist.execute(ExplodeGroupCommand(scene.groups[0]))
+    back = next(f for f in scene.mesh.faces
+                if f.attrs.get("color") == [0.8, 0.2, 0.1])
+    assert back.attrs.get("texture") == {"path": "brick.png", "sw": 1.0, "sh": 1.0}
