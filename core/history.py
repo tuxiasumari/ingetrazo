@@ -476,6 +476,13 @@ class DeleteFaceCommand(Command):
         scene.version += 1
 
 
+def _dirty_group_chunks(scene) -> None:
+    """Attr edits bypass the mesh mutation primitives — flag every group
+    mesh so the viewport's cached chunks re-validate their materials."""
+    for g in getattr(scene, "groups", []):
+        g.mesh._chunk_dirty = True
+
+
 class SetFaceColorCommand(Command):
     """Paint a set of faces with an RGB colour (or clear it with ``None``),
     stored in each face's ``attrs["color"]`` — the first user-facing use of the
@@ -497,6 +504,7 @@ class SetFaceColorCommand(Command):
                 f.attrs.pop("color", None)
             else:
                 f.attrs["color"] = list(self._color)
+        _dirty_group_chunks(scene)
         scene.version += 1
 
     def undo(self, scene) -> None:
@@ -505,6 +513,7 @@ class SetFaceColorCommand(Command):
                 f.attrs.pop("color", None)
             else:
                 f.attrs["color"] = list(old)
+        _dirty_group_chunks(scene)
         scene.version += 1
 
 
@@ -707,6 +716,7 @@ class SetFaceTextureCommand(Command):
                 f.attrs.pop("texture", None)
             else:
                 f.attrs["texture"] = dict(self._tex)
+        _dirty_group_chunks(scene)
         scene.version += 1
 
     def undo(self, scene) -> None:
@@ -715,6 +725,7 @@ class SetFaceTextureCommand(Command):
                 f.attrs.pop("texture", None)
             else:
                 f.attrs["texture"] = dict(old)
+        _dirty_group_chunks(scene)
         scene.version += 1
 
 

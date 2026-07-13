@@ -2503,12 +2503,25 @@ class Viewport(QOpenGLWidget):
             cache = self._group_chunks = {}
         entry = cache.get(id(group))
         vkey = (self.scene.version, id(self.scene.mesh))
+        mesh = group.mesh
         if entry is not None:
             if entry.get("vkey") == vkey:
                 return entry
-            d = self._translation_probe(entry, group.mesh)
+            d = self._translation_probe(entry, mesh)
             if d is not None:
-                self._shift_chunk(entry, d, group.mesh)
+                self._shift_chunk(entry, d, mesh)
+                entry["vkey"] = vkey
+                entry["rev"] += 1
+                return entry
+            # Clean fast path: no mutation primitive touched this mesh since
+            # the last validation (O(1) dirty flag) and the samples agree —
+            # skip the 100 ms fingerprint walk that used to run on EVERY
+            # scene change (each stroke/drag frame beside a big import).
+            if (not getattr(mesh, "_chunk_dirty", True)
+                    and len(mesh.vertices) == entry["nv"]
+                    and len(mesh.edges) == entry["ne"]
+                    and len(mesh.faces) == entry["nf"]
+                    and self._samples_match(entry, mesh)):
                 entry["vkey"] = vkey
                 return entry
         fp = self._group_fp(group)
@@ -2525,6 +2538,7 @@ class Viewport(QOpenGLWidget):
                 entry["fp"] = fp
                 entry["fp_approx"] = False
                 entry["vkey"] = vkey
+                mesh._chunk_dirty = False
                 return entry
         _c0 = _time_mod.perf_counter() if _PERF else 0.0
         import numpy as np
@@ -2613,7 +2627,7 @@ class Viewport(QOpenGLWidget):
         idxs = sorted({k * max(nv - 1, 0) // 31 for k in range(32)}) if nv else []
         samples = [(i, (verts[i].position.x(), verts[i].position.y(),
                         verts[i].position.z())) for i in idxs]
-        entry = {"fp": fp, "vkey": vkey,
+        entry = {"fp": fp, "vkey": vkey, "rev": 0,
                  "nv": nv, "ne": len(mesh.edges), "nf": len(mesh.faces),
                  "samples": samples, "coordsum": coordsum,
                  "edges": edges_data.tobytes(),
@@ -2633,6 +2647,7 @@ class Viewport(QOpenGLWidget):
         if _PERF:
             _plog("chunk_rebuild", (_time_mod.perf_counter() - _c0) * 1000.0,
                   extra=f"faces={len(faces)}")
+        mesh._chunk_dirty = False
         cache[id(group)] = entry
         return entry
 
@@ -2713,6 +2728,12 @@ class Viewport(QOpenGLWidget):
         loose_parts = [np.asarray(ent_loose, dtype=bool)]
 
         if scene.edit_group is None:
+            # The group block is cached across versions (keyed by each
+            # chunk's identity + rev + flags): re-deriving per-face masks and
+            # re-offsetting 300k triangle rows per scene change cost ~130 ms
+            # per stroke/drag frame beside a big import.
+            sig = []
+            chunks = []
             for g in scene.groups:
                 if getattr(g, "billboard", False):
                     continue          # per-frame quad; picked separately
@@ -2721,20 +2742,55 @@ class Viewport(QOpenGLWidget):
                 if not (gvis or gsel):
                     continue
                 chunk = self._group_chunk(g)
-                n = len(chunk["faces"])
-                if not n:
+                if not chunk["faces"]:
                     continue
+                sig.append((id(g), id(chunk), chunk["rev"], gvis, gsel))
+                chunks.append((g, chunk, gvis, gsel))
+            blk = getattr(self, "_pick_block", None)
+            if blk is None or blk[0] != tuple(sig):
+                b_entities: list = []
+                b_v0, b_e1, b_e2, b_te = [], [], [], []
+                b_area, b_vis, b_sel = [], [], []
+                for g, chunk, gvis, gsel in chunks:
+                    n = len(chunk["faces"])
+                    off = len(b_entities)
+                    b_entities.extend((f, g) for f in chunk["faces"])
+                    b_area.append(chunk["areas"])
+                    b_vis.append(np.full(n, gvis, dtype=bool))
+                    b_sel.append(np.full(n, gsel, dtype=bool))
+                    if chunk["v0"] is not None:
+                        b_v0.append(chunk["v0"])
+                        b_e1.append(chunk["e1"])
+                        b_e2.append(chunk["e2"])
+                        b_te.append(chunk["tri_ent"] + off)
+                blk = (tuple(sig), {
+                    "entities": b_entities,
+                    "areas": (np.concatenate(b_area) if b_area
+                              else np.empty(0)),
+                    "vis": (np.concatenate(b_vis) if b_vis
+                            else np.empty(0, bool)),
+                    "sel": (np.concatenate(b_sel) if b_sel
+                            else np.empty(0, bool)),
+                    "v0": np.concatenate(b_v0) if b_v0 else None,
+                    "e1": np.concatenate(b_e1) if b_v0 else None,
+                    "e2": np.concatenate(b_e2) if b_v0 else None,
+                    "te": np.concatenate(b_te) if b_v0 else None,
+                })
+                self._pick_block = blk
+            block = blk[1]
+            if block["entities"]:
                 offset = len(entities)
-                entities.extend((f, g) for f in chunk["faces"])
-                areas.append(chunk["areas"])
-                vis_parts.append(np.full(n, gvis, dtype=bool))
-                sel_parts.append(np.full(n, gsel, dtype=bool))
-                loose_parts.append(np.zeros(n, dtype=bool))
-                if chunk["v0"] is not None:
-                    v0s.append(chunk["v0"])
-                    e1s.append(chunk["e1"])
-                    e2s.append(chunk["e2"])
-                    tents.append(chunk["tri_ent"] + offset)
+                entities.extend(block["entities"])
+                areas.append(block["areas"])
+                vis_parts.append(block["vis"])
+                sel_parts.append(block["sel"])
+                loose_parts.append(
+                    np.zeros(len(block["entities"]), dtype=bool))
+                if block["v0"] is not None:
+                    v0s.append(block["v0"])
+                    e1s.append(block["e1"])
+                    e2s.append(block["e2"])
+                    tents.append(block["te"] + offset)
 
         edges: list = []
         ea: list = []

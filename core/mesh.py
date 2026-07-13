@@ -219,6 +219,10 @@ class Mesh:
 
     def __init__(self) -> None:
         self._registry: dict[tuple, Vertex] = {}
+        #: Set by every mutation primitive; the viewport's cached group chunk
+        #: clears it after (re)validating — an O(1) dirty signal so render
+        #: caches never content-hash a 131k-vertex mesh per scene change.
+        self._chunk_dirty = True
         self.vertices: list[Vertex] = []
         self.edges: list[Edge] = []
         self.faces: list[Face] = []
@@ -290,6 +294,7 @@ class Mesh:
         Robust to splits: an edge is tagged when both its endpoints fall on one
         of the loop's segments, so a segment split by crossing geometry still has
         all its pieces tagged. Returns the id, or ``None`` if nothing matched."""
+        self._chunk_dirty = True
         from core.topology import _point_on_seg_incl
         global _CURVE_COUNTER
         pts = list(loop_points)
@@ -329,6 +334,7 @@ class Mesh:
         (curve-degree ≠ 2). Each resulting chain keeps/gets its own id — so a
         circle crossed by a square's edges selects as two separate arcs, exactly
         SketchUp's 'two contours'. A pristine circle stays one curve."""
+        self._chunk_dirty = True
         global _CURVE_COUNTER
         by_id: dict[int, list[Edge]] = {}
         for e in self.edges:
@@ -374,6 +380,7 @@ class Mesh:
                     e.curve = new_id
 
     def _link_edge(self, v0: Vertex, v1: Vertex) -> Edge:
+        self._chunk_dirty = True
         e = self.find_edge(v0, v1)
         if e is not None:
             return e
@@ -395,6 +402,7 @@ class Mesh:
     def remove_edge(self, e: Edge) -> None:
         """Detach and drop an edge. Callers remove any incident faces first when
         needed; this does not cascade."""
+        self._chunk_dirty = True
         e.v0.edges.discard(e)
         e.v1.edges.discard(e)
         if e in self.edges:
@@ -417,6 +425,7 @@ class Mesh:
         triangles across the opening) and registers the face on rim edges it
         does not geometrically touch, which lets ``is_closed`` report a broken
         solid as watertight (defeating the BIM push guard)."""
+        self._chunk_dirty = True
         loop = [self.vertex(p) for p in loop_positions]
         raw_holes = [list(h) for h in (hole_loops or [])]
         if len(raw_holes) > 1:
@@ -458,6 +467,7 @@ class Mesh:
     def remove_face(self, face: Face) -> None:
         """Drop a face and detach it from its boundary edges' radial lists. The
         edges themselves stay (they may border other faces or stand alone)."""
+        self._chunk_dirty = True
         for lp in (face.loop, *face.hole_loops):
             n = len(lp)
             for i in range(n):
@@ -542,6 +552,7 @@ class Mesh:
     def restore_state(self, snap: dict) -> None:
         """Restore a :meth:`capture_state` snapshot. Objects created since are
         dropped; captured ones are re-listed with their fields reset."""
+        self._chunk_dirty = True
         self.vertices[:] = snap["vertices"]
         self.edges[:] = snap["edges"]
         self.faces[:] = snap["faces"]
@@ -568,6 +579,7 @@ class Mesh:
 
     # ---- Reset --------------------------------------------------------------
     def clear(self) -> None:
+        self._chunk_dirty = True
         self._registry.clear()
         self.vertices.clear()
         self.edges.clear()
@@ -590,6 +602,7 @@ class Mesh:
         when it lands exactly on another vertex is deliberately *not* done here;
         that topological merge is a separate operation (migration phase M2).
         """
+        self._chunk_dirty = True
         old = _key(v.position)
         v.position = v.position + delta
         new = _key(v.position)
@@ -652,6 +665,7 @@ class Mesh:
         their incidence, and faces degenerated below three distinct vertices
         are dropped. Returns whether anything merged. No undo bookkeeping —
         callers run under a snapshot, like the rest of the stitch."""
+        self._chunk_dirty = True
         groups: dict = {}
         for v in self.vertices:
             groups.setdefault(_key(v.position), []).append(v)
@@ -712,6 +726,7 @@ class Mesh:
         one with more holes survives — it carries the user's subdivision, and
         its holes are filled by their own faces. Returns how many were
         removed."""
+        self._chunk_dirty = True
         seen: dict = {}
         removed = 0
         for f in list(self.faces):
