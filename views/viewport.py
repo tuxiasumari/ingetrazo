@@ -36,10 +36,28 @@ Tool input (when a tool is active):
 from __future__ import annotations
 
 import math
+import os
 import re
+import time as _time_mod
 from array import array
 from pathlib import Path
 from typing import Optional
+
+# Perf telemetry (INGETRAZO_PERF=1): every operation slower than 50 ms and a
+# once-per-second frame summary land in ~/ingetrazo-perf.log — the tool for
+# "it feels slow" reports from real sessions, where synthetic benchmarks lie.
+_PERF = bool(os.environ.get("INGETRAZO_PERF"))
+_perf_file = None
+
+
+def _plog(tag: str, ms: float, extra: str = "", floor: float = 50.0) -> None:
+    global _perf_file
+    if not _PERF or ms < floor:
+        return
+    if _perf_file is None:
+        _perf_file = open(Path.home() / "ingetrazo-perf.log", "a", buffering=1)
+    _perf_file.write(f"{_time_mod.strftime('%H:%M:%S')} {tag} {ms:.0f}ms"
+                     f"{' ' + extra if extra else ''}\n")
 
 from PySide6.QtCore import QEvent, Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import (
@@ -457,6 +475,7 @@ class Viewport(QOpenGLWidget):
     def paintGL(self) -> None:
         if self._gl is None or self._program is None:
             return
+        _pt0 = _time_mod.perf_counter() if _PERF else 0.0
 
         # Render the 3D scene into our own FBO (which has a real depth buffer)
         # then blit the colour to the widget's default framebuffer. Sizes are
@@ -665,6 +684,21 @@ class Viewport(QOpenGLWidget):
 
         # 2D overlays on top of the OpenGL framebuffer.
         self._draw_overlay()
+
+        if _PERF:
+            _dt = (_time_mod.perf_counter() - _pt0) * 1000.0
+            _plog("paintGL", _dt)
+            st = getattr(self, "_perf_stat", None) or \
+                [_time_mod.perf_counter(), 0, 0.0]
+            st[1] += 1
+            st[2] += _dt
+            now = _time_mod.perf_counter()
+            if now - st[0] >= 1.0:
+                _plog("frames/s", st[2] / max(st[1], 1),
+                      extra=f"{st[1]} paints en {now-st[0]:.1f}s (avg ms)",
+                      floor=0.0)
+                st = [now, 0, 0.0]
+            self._perf_stat = st
 
     # ---- Setup helpers ------------------------------------------------------
     def _compile_program(self) -> QOpenGLShaderProgram:
@@ -1063,6 +1097,7 @@ class Viewport(QOpenGLWidget):
     def _sync_edges(self) -> None:
         if self.scene.version == self._edges_version:
             return
+        _st0 = _time_mod.perf_counter() if _PERF else 0.0
 
         # The scene changed: purge hover/selection references to entities that
         # no longer exist, or deleted geometry keeps ghost-rendering (blue
@@ -1266,6 +1301,8 @@ class Viewport(QOpenGLWidget):
         self._tex_faces_vbo.release()
         self._tex_faces_count = len(tex_raw) // 20
 
+        if _PERF:
+            _plog("sync_edges", (_time_mod.perf_counter() - _st0) * 1000.0)
         self._edges_version = self.scene.version
         self.sceneVersionChanged.emit(self._edges_version)
 
@@ -2352,7 +2389,11 @@ class Viewport(QOpenGLWidget):
         if fp is None:
             if len(memo) > 64:
                 memo.clear()
+            _f0 = _time_mod.perf_counter() if _PERF else 0.0
             fp = memo[key] = self._mesh_fingerprint(group.mesh)
+            if _PERF:
+                _plog("fingerprint", (_time_mod.perf_counter() - _f0) * 1000.0,
+                      extra=f"nv={fp[0]}")
         return fp
 
     @staticmethod
@@ -2457,6 +2498,7 @@ class Viewport(QOpenGLWidget):
         if entry is not None and entry["fp"] == fp:
             entry["vkey"] = vkey
             return entry
+        _c0 = _time_mod.perf_counter() if _PERF else 0.0
         import numpy as np
         mesh = group.mesh
         edges_data = array("f")
@@ -2560,6 +2602,9 @@ class Viewport(QOpenGLWidget):
                  "soft_n1": np.asarray(soft_n1, dtype=np.float64),
                  "soft_c1": np.asarray(soft_c1, dtype=np.float64),
                  "soft_single": np.asarray(soft_single, dtype=bool)}
+        if _PERF:
+            _plog("chunk_rebuild", (_time_mod.perf_counter() - _c0) * 1000.0,
+                  extra=f"faces={len(faces)}")
         cache[id(group)] = entry
         return entry
 
@@ -2596,6 +2641,7 @@ class Viewport(QOpenGLWidget):
         cached = getattr(self, "_pick_index_cache", None)
         if cached is not None and cached[0] == key:
             return cached[1]
+        _p0 = _time_mod.perf_counter() if _PERF else 0.0
         import numpy as np
         from types import SimpleNamespace
         scene = self.scene
@@ -2688,6 +2734,8 @@ class Viewport(QOpenGLWidget):
             edge_b=np.asarray(eb, dtype=np.float64) if edges else None,
             edge_sel=np.asarray(esel, dtype=bool) if edges else None,
         )
+        if _PERF:
+            _plog("pick_index", (_time_mod.perf_counter() - _p0) * 1000.0)
         self._pick_index_cache = (key, idx)
         return idx
 
@@ -3389,6 +3437,8 @@ class Viewport(QOpenGLWidget):
             self.camera.zoom_to(steps, focus)
         else:
             self.camera.zoom(steps)
+        if _PERF:
+            _plog("wheel", (_time_mod.monotonic() - now) * 1000.0)
         self.update()
 
     def event(self, ev) -> bool:
