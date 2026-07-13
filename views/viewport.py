@@ -666,6 +666,13 @@ class Viewport(QOpenGLWidget):
         # 2D overlays on top of the OpenGL framebuffer.
         self._draw_overlay()
 
+        # Hard sync before Qt composites the widget texture into the window.
+        # On Wayland with explicit sync (new kernels/Mesa), the compositor can
+        # otherwise sample the texture before our blit+overlay landed and show
+        # the PREVIOUS frame — the ghost/double image under fast zoom bursts.
+        # Costs ~1 ms of pipelining at this scene size; correctness first.
+        self._gl.glFinish()
+
     # ---- Setup helpers ------------------------------------------------------
     def _compile_program(self) -> QOpenGLShaderProgram:
         prog = QOpenGLShaderProgram(self)
