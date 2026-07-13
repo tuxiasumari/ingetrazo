@@ -227,7 +227,8 @@ def test_world_under_cursor_uses_cached_pick():
     vp.scene = scene
     vp.camera = _Cam()
     vp._pixel_to_ray = lambda x, y: (QVector3D(0, -10, 0), QVector3D(0, 1, 0))
-    vp._pick_triangles = Viewport._pick_triangles.__get__(vp)
+    vp._pick_index = Viewport._pick_index.__get__(vp)
+    vp._ray_hits = Viewport._ray_hits.__get__(vp)
     under = Viewport._world_under_cursor.__get__(vp)
 
     hit = under(0, 0)

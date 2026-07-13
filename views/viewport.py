@@ -1332,11 +1332,21 @@ class Viewport(QOpenGLWidget):
         camera and one away — so a curved surface shows its outline. A soft
         edge with a single face is always a profile (a boundary). View-dependent,
         called each frame."""
+        # Only soft edges matter here; scanning ALL edges per frame is pure
+        # waste on a big imported mesh (40k edges, none soft) — cache the
+        # soft subset per scene version.
+        key = (self.scene.version, id(self.scene.mesh))
+        cached = getattr(self, "_soft_edges_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, [e for e in self.scene.render_edges()
+                            if getattr(e, "soft", False)])
+            self._soft_edges_cache = cached
+        soft_edges = cached[1]
+        if not soft_edges:
+            return 0
         eye = self.camera.eye()
         data = array("f")
-        for e in self.scene.render_edges():
-            if not getattr(e, "soft", False):
-                continue
+        for e in soft_edges:
             faces = e.faces
             # A 1-face soft edge is an open-surface boundary (a real profile); a
             # 0-face one is a dangling line (not drawn here).
@@ -2217,22 +2227,155 @@ class Viewport(QOpenGLWidget):
         py = (1.0 - (ndc_y * 0.5 + 0.5)) * self.height()
         return (px, py)
 
+    def _np_mvp(self):
+        """Current MVP as a (4, 4) float64 NumPy matrix (row-major indexing).
+        ``QMatrix4x4.data()`` is column-major, hence the Fortran reshape."""
+        import numpy as np
+        m = self.camera.projection_matrix() * self.camera.view_matrix()
+        return np.array(m.data(), dtype=np.float64).reshape(4, 4, order="F")
+
+    def _project_px(self, pts):
+        """Batch world points (N, 3) → ``(px, py, in_front)`` arrays — the
+        exact math of :meth:`_world_to_pixel`, vectorised."""
+        import numpy as np
+        M = self._np_mvp()
+        clip = pts @ M[:, :3].T + M[:, 3]
+        w = clip[:, 3]
+        ok = w > 0
+        safe = np.where(ok, w, 1.0)
+        px = (clip[:, 0] / safe * 0.5 + 0.5) * self.width()
+        py = (1.0 - (clip[:, 1] / safe * 0.5 + 0.5)) * self.height()
+        return px, py, ok
+
+    def _pick_index(self):
+        """Flat NumPy pick index of the scene — triangles of every loose and
+        group face (with visibility/selectability masks and areas) plus the
+        loose edges — rebuilt when the scene changes.
+
+        Every mouse-move pick used to walk the mesh in Python re-running
+        earcut per face (~1–2 s per move against an imported 17k-triangle
+        building — the app read as frozen); batched over this index a pick
+        is a couple of milliseconds."""
+        key = (self.scene.version, id(self.scene.mesh))
+        cached = getattr(self, "_pick_index_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        import numpy as np
+        from types import SimpleNamespace
+        scene = self.scene
+        entities: list = []           # (face, group_or_None)
+        ent_area: list = []
+        ent_sel: list = []
+        ent_vis: list = []
+        ent_loose: list = []
+        tris: list = []
+        tri_ent: list = []
+
+        def add_face(f, grp, vis, sel):
+            i = len(entities)
+            entities.append((f, grp))
+            ent_area.append(f.area())
+            ent_vis.append(vis)
+            ent_sel.append(sel)
+            ent_loose.append(grp is None)
+            for t0, t1, t2 in f.triangulate():
+                tris.append([[t0.x(), t0.y(), t0.z()],
+                             [t1.x(), t1.y(), t1.z()],
+                             [t2.x(), t2.y(), t2.z()]])
+                tri_ent.append(i)
+
+        for f in scene.faces:
+            add_face(f, None, scene.entity_visible(f),
+                     scene.entity_selectable(f))
+        if scene.edit_group is None:
+            for g in scene.groups:
+                if getattr(g, "billboard", False):
+                    continue          # per-frame quad; picked separately
+                gvis = scene.entity_visible(g)
+                gsel = scene.entity_selectable(g)
+                if not (gvis or gsel):
+                    continue
+                for f in g.mesh.faces:
+                    add_face(f, g, gvis, gsel)
+
+        edges: list = []
+        ea: list = []
+        eb: list = []
+        esel: list = []
+        for e in scene.edges:
+            edges.append(e)
+            ea.append([e.a.x(), e.a.y(), e.a.z()])
+            eb.append([e.b.x(), e.b.y(), e.b.z()])
+            esel.append(scene.entity_selectable(e))
+
+        if tris:
+            t = np.asarray(tris, dtype=np.float64)
+            tv0, te1, te2 = t[:, 0], t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]
+            tri_ent_a = np.asarray(tri_ent, dtype=np.int64)
+        else:
+            tv0 = te1 = te2 = tri_ent_a = None
+        idx = SimpleNamespace(
+            entities=entities,
+            ent_area=np.asarray(ent_area, dtype=np.float64),
+            ent_sel=np.asarray(ent_sel, dtype=bool),
+            ent_vis=np.asarray(ent_vis, dtype=bool),
+            ent_loose=np.asarray(ent_loose, dtype=bool),
+            tri_v0=tv0, tri_e1=te1, tri_e2=te2, tri_ent=tri_ent_a,
+            edges=edges,
+            edge_a=np.asarray(ea, dtype=np.float64) if edges else None,
+            edge_b=np.asarray(eb, dtype=np.float64) if edges else None,
+            edge_sel=np.asarray(esel, dtype=bool) if edges else None,
+        )
+        self._pick_index_cache = (key, idx)
+        return idx
+
+    def _ray_hits(self, idx, origin, direction, ent_mask):
+        """Per-entity nearest ray parameter over the index triangles whose
+        entity passes ``ent_mask``. Returns an (E,) array of t (``inf`` = no
+        hit) or ``None`` when the index has no triangles. Same acceptance
+        thresholds as :func:`_ray_triangle`."""
+        import numpy as np
+        if idx.tri_v0 is None:
+            return None
+        o = np.array([origin.x(), origin.y(), origin.z()])
+        d = np.array([direction.x(), direction.y(), direction.z()])
+        v0, e1, e2 = idx.tri_v0, idx.tri_e1, idx.tri_e2
+        p = np.cross(d, e2)
+        det = np.einsum("ij,ij->i", e1, p)
+        ok = np.abs(det) > 1e-6
+        inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+        s = o - v0
+        u = np.einsum("ij,ij->i", s, p) * inv
+        q = np.cross(s, e1)
+        v = (q @ d) * inv
+        t = np.einsum("ij,ij->i", e2, q) * inv
+        hit = (ok & (u >= 0.0) & (u <= 1.0) & (v >= 0.0) & (u + v <= 1.0)
+               & (t > 1e-6) & ent_mask[idx.tri_ent])
+        tvals = np.where(hit, t, np.inf)
+        face_t = np.full(len(idx.entities), np.inf)
+        np.minimum.at(face_t, idx.tri_ent, tvals)
+        return face_t
+
     def pick_edge(self, screen_x: float, screen_y: float):
         """Return the edge closest to ``(screen_x, screen_y)`` within threshold."""
-        best = None
-        best_d = self.pick_threshold_px
-        for edge in self.scene.edges:
-            if not self.scene.entity_selectable(edge):
-                continue                        # hidden or locked layer
-            pa = self._world_to_pixel(edge.a)
-            pb = self._world_to_pixel(edge.b)
-            if pa is None or pb is None:
-                continue
-            d = _point_to_segment_distance_2d((screen_x, screen_y), pa, pb)
-            if d < best_d:
-                best_d = d
-                best = edge
-        return best
+        import numpy as np
+        idx = self._pick_index()
+        if idx.edge_a is None:
+            return None
+        ax, ay, oka = self._project_px(idx.edge_a)
+        bx, by, okb = self._project_px(idx.edge_b)
+        ok = oka & okb & idx.edge_sel
+        if not ok.any():
+            return None
+        dx, dy = bx - ax, by - ay
+        l2 = dx * dx + dy * dy
+        safe = np.where(l2 > 1e-12, l2, 1.0)
+        t = np.clip(((screen_x - ax) * dx + (screen_y - ay) * dy) / safe,
+                    0.0, 1.0)
+        d = np.hypot(ax + t * dx - screen_x, ay + t * dy - screen_y)
+        d = np.where(ok, d, np.inf)
+        i = int(np.argmin(d))
+        return idx.edges[i] if d[i] < self.pick_threshold_px else None
 
     def pick_dimension(self, screen_x: float, screen_y: float):
         """Return the dimension whose lines (extension + dimension line) are
@@ -2324,19 +2467,24 @@ class Viewport(QOpenGLWidget):
     def pick_vertex(self, screen_x: float, screen_y: float):
         """Return the scene vertex (corner) closest to the cursor within the
         pick threshold, or ``None``. Used to acquire a corner as a 'from point'
-        reference while drawing. Occluded vertices are ignored."""
-        best = None
-        best_d = self.pick_threshold_px
-        for edge in self.scene.edges:
-            for vertex in (edge.a, edge.b):
-                vp = self._world_to_pixel(vertex)
-                if vp is None:
-                    continue
-                d = math.hypot(vp[0] - screen_x, vp[1] - screen_y)
-                if d < best_d and not self._is_occluded(vertex):
-                    best_d = d
-                    best = vertex
-        return best
+        reference while drawing. Occluded vertices are ignored (tested in
+        ascending screen distance, so the nearest visible corner wins — the
+        same answer the old per-edge scan produced)."""
+        import numpy as np
+        idx = self._pick_index()
+        if idx.edge_a is None:
+            return None
+        pts = np.concatenate([idx.edge_a, idx.edge_b])
+        px, py, ok = self._project_px(pts)
+        d = np.where(ok, np.hypot(px - screen_x, py - screen_y), np.inf)
+        n = len(idx.edges)
+        cand = np.where(d < self.pick_threshold_px)[0]
+        for i in cand[np.argsort(d[cand])]:
+            e = idx.edges[int(i) % n]
+            vertex = e.a if i < n else e.b
+            if not self._is_occluded(vertex):
+                return vertex
+        return None
 
     def _occlusion_triangles(self):
         """Cached NumPy arrays ``(v0, e1, e2)`` of every loose-mesh triangle,
@@ -2410,25 +2558,22 @@ class Viewport(QOpenGLWidget):
         origin, direction = self._pixel_to_ray(screen_x, screen_y)
         if origin is None or direction is None:
             return None
-        hits: list[tuple[float, object]] = []
-        for face in self.scene.faces:
-            if not self.scene.entity_selectable(face):
-                continue                        # hidden or locked layer
-            face_t = None
-            for t0, t1, t2 in face.triangulate():
-                t = _ray_triangle(origin, direction, t0, t1, t2)
-                if t is not None and (face_t is None or t < face_t):
-                    face_t = t
-            if face_t is not None:
-                hits.append((face_t, face))
-        if not hits:
+        import numpy as np
+        idx = self._pick_index()
+        if not idx.entities:
             return None
-        best_t = min(t for t, _ in hits)
+        face_t = self._ray_hits(idx, origin, direction,
+                                idx.ent_loose & idx.ent_sel)
+        if face_t is None:
+            return None
+        best_t = face_t.min()
+        if not np.isfinite(best_t):
+            return None
         eps = max(1e-4, best_t * 1e-4)
-        candidates = [f for t, f in hits if t <= best_t + eps]
-        if len(candidates) == 1:
-            return candidates[0]
-        return min(candidates, key=lambda f: f.area())
+        cand = np.where(face_t <= best_t + eps)[0]
+        if len(cand) == 1:
+            return idx.entities[int(cand[0])][0]
+        return idx.entities[int(cand[np.argmin(idx.ent_area[cand])])][0]
 
     def pick_face_any(self, screen_x: float, screen_y: float):
         """Front-most face under the cursor across the loose mesh **and** every
@@ -2438,33 +2583,21 @@ class Viewport(QOpenGLWidget):
         origin, direction = self._pixel_to_ray(screen_x, screen_y)
         if origin is None or direction is None:
             return None, None
-        if self.scene.edit_group is not None:
-            sources = [(None, self.scene.faces)]
-        else:
-            sources = [(None, self.scene.faces)] + [
-                (g, g.mesh.faces) for g in self.scene.groups
-                if self.scene.entity_selectable(g)
-            ]
-        hits: list[tuple[float, object, object]] = []
-        for grp, faces in sources:
-            for face in faces:
-                if grp is None and not self.scene.entity_selectable(face):
-                    continue                    # hidden or locked layer
-                face_t = None
-                for t0, t1, t2 in face.triangulate():
-                    t = _ray_triangle(origin, direction, t0, t1, t2)
-                    if t is not None and (face_t is None or t < face_t):
-                        face_t = t
-                if face_t is not None:
-                    hits.append((face_t, face, grp))
-        if not hits:
+        import numpy as np
+        idx = self._pick_index()
+        if not idx.entities:
             return None, None
-        best_t = min(t for t, _, _ in hits)
+        face_t = self._ray_hits(idx, origin, direction, idx.ent_sel)
+        if face_t is None:
+            return None, None
+        best_t = face_t.min()
+        if not np.isfinite(best_t):
+            return None, None
         eps = max(1e-4, best_t * 1e-4)
-        candidates = [(f, g) for t, f, g in hits if t <= best_t + eps]
-        if len(candidates) == 1:
-            return candidates[0]
-        return min(candidates, key=lambda fg: fg[0].area())
+        cand = np.where(face_t <= best_t + eps)[0]
+        if len(cand) == 1:
+            return idx.entities[int(cand[0])]
+        return idx.entities[int(cand[np.argmin(idx.ent_area[cand])])]
 
     def pick_group(self, screen_x: float, screen_y: float):
         """The group whose geometry the cursor hits (front-most face, or nearest
@@ -2473,7 +2606,16 @@ class Viewport(QOpenGLWidget):
             return None                     # inside a group: pick content
         origin, direction = self._pixel_to_ray(screen_x, screen_y)
         if origin is not None and direction is not None:
+            import numpy as np
             best = None  # (t, group)
+            idx = self._pick_index()
+            if idx.entities:
+                face_t = self._ray_hits(idx, origin, direction,
+                                        (~idx.ent_loose) & idx.ent_sel)
+                if face_t is not None:
+                    i = int(np.argmin(face_t))
+                    if np.isfinite(face_t[i]):
+                        best = (float(face_t[i]), idx.entities[i][1])
             for g in self.scene.groups:
                 if not self.scene.entity_selectable(g):
                     continue                    # hidden or locked layer
@@ -2485,12 +2627,6 @@ class Viewport(QOpenGLWidget):
                             t = _ray_triangle(origin, direction, *tri)
                             if t is not None and (best is None or t < best[0]):
                                 best = (t, g)
-                    continue
-                for face in g.mesh.faces:
-                    for t0, t1, t2 in face.triangulate():
-                        t = _ray_triangle(origin, direction, t0, t1, t2)
-                        if t is not None and (best is None or t < best[0]):
-                            best = (t, g)
             if best is not None:
                 return best[1]
         best_d = self.pick_threshold_px
@@ -2837,31 +2973,6 @@ class Viewport(QOpenGLWidget):
                 tool.on_box_select(self, rect, crossing, additive)
             self.update()
 
-    def _pick_triangles(self):
-        """Cached NumPy triangle arrays of every *rendered* face (loose mesh +
-        groups), rebuilt when the scene changes. Zoom-to-cursor picks on every
-        wheel event; re-triangulating the whole model per event (2.75 ms on
-        the plaza) starved the paint loop during fast zoom bursts and frames
-        showed up late (the \"ghost image\" report)."""
-        key = (self.scene.version, id(self.scene.mesh))
-        cached = getattr(self, "_pick_cache", None)
-        if cached is not None and cached[0] == key:
-            return cached[1]
-        import numpy as np
-        tris = []
-        for face in self.scene.render_faces():
-            for t0, t1, t2 in face.triangulate():
-                tris.append([[t0.x(), t0.y(), t0.z()],
-                             [t1.x(), t1.y(), t1.z()],
-                             [t2.x(), t2.y(), t2.z()]])
-        if tris:
-            t = np.asarray(tris, dtype=np.float64)
-            arrays = (t[:, 0], t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
-        else:
-            arrays = None
-        self._pick_cache = (key, arrays)
-        return arrays
-
     def _world_under_cursor(self, x: float, y: float) -> Optional[QVector3D]:
         """The world point the cursor points at: nearest geometry hit, else the
         ground plane (Z=0), else the focal plane through the target."""
@@ -2869,25 +2980,14 @@ class Viewport(QOpenGLWidget):
         if origin is None or direction is None:
             return None
         best_t = None
-        arrays = self._pick_triangles()
-        if arrays is not None:
+        idx = self._pick_index()
+        if idx.entities:
             import numpy as np
-            v0, e1, e2 = arrays
-            o = np.array([origin.x(), origin.y(), origin.z()])
-            d = np.array([direction.x(), direction.y(), direction.z()])
-            p = np.cross(d, e2)
-            det = np.einsum("ij,ij->i", e1, p)
-            ok = np.abs(det) > 1e-9
-            inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
-            s = o - v0
-            u = np.einsum("ij,ij->i", s, p) * inv
-            q = np.cross(s, e1)
-            v = (q @ d) * inv
-            t = np.einsum("ij,ij->i", e2, q) * inv
-            hit = (ok & (u >= 0.0) & (u <= 1.0) & (v >= 0.0) & (u + v <= 1.0)
-                   & (t > 1e-9))
-            if hit.any():
-                best_t = float(t[hit].min())
+            face_t = self._ray_hits(idx, origin, direction, idx.ent_vis)
+            if face_t is not None:
+                t = face_t.min()
+                if np.isfinite(t):
+                    best_t = float(t)
         if best_t is not None:
             return origin + direction * best_t
         if abs(direction.z()) > 1e-6:
