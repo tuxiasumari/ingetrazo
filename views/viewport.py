@@ -2412,9 +2412,22 @@ class Viewport(QOpenGLWidget):
         if d.length() < 1e-9:
             return None                   # unchanged, or a non-geometric edit
         for i, p in entry["samples"][1:]:
-            if ((verts[i].position - QVector3D(*p)) - d).length() > 1e-6:
+            # float32 storage rounds each translated vertex differently (up
+            # to ~1e-5 at building-scale coordinates); a real rotation moves
+            # samples apart by millimetres — no ambiguity at this tolerance.
+            if ((verts[i].position - QVector3D(*p)) - d).length() > 2e-4:
                 return None
         return d
+
+    @staticmethod
+    def _samples_match(entry, mesh) -> bool:
+        verts = mesh.vertices
+        if len(verts) != entry["nv"]:
+            return False
+        for i, p in entry["samples"]:
+            if (verts[i].position - QVector3D(*p)).length() > 1e-6:
+                return False
+        return True
 
     def _shift_chunk(self, entry, d, mesh) -> None:
         """Translate every cached array of ``entry`` by ``d`` in place —
@@ -2454,6 +2467,10 @@ class Viewport(QOpenGLWidget):
         fp = entry["fp"]
         entry["fp"] = (fp[0], fp[1], fp[2], round(entry["coordsum"], 4),
                        fp[4], fp[5])
+        # float32 vertex storage makes the analytic checksum drift from a
+        # fresh walk — mark it approximate so the next full comparison
+        # verifies by samples instead of rebuilding 100k faces for nothing.
+        entry["fp_approx"] = True
 
     @staticmethod
     def _chunk_tri_pos(entry):
@@ -2495,9 +2512,20 @@ class Viewport(QOpenGLWidget):
                 entry["vkey"] = vkey
                 return entry
         fp = self._group_fp(group)
-        if entry is not None and entry["fp"] == fp:
-            entry["vkey"] = vkey
-            return entry
+        if entry is not None:
+            same = entry["fp"] == fp
+            if not same and entry.get("fp_approx"):
+                # Post-shift: the checksum is approximate (float32 drift).
+                # Counts/attrs/soft equal + every sampled vertex in place is
+                # the real test; heal the stored fingerprint on acceptance.
+                same = (entry["fp"][:3] == fp[:3]
+                        and entry["fp"][4:] == fp[4:]
+                        and self._samples_match(entry, group.mesh))
+            if same:
+                entry["fp"] = fp
+                entry["fp_approx"] = False
+                entry["vkey"] = vkey
+                return entry
         _c0 = _time_mod.perf_counter() if _PERF else 0.0
         import numpy as np
         mesh = group.mesh
@@ -2582,7 +2610,7 @@ class Viewport(QOpenGLWidget):
         for v in verts:
             p = v.position
             coordsum += p.x() + p.y() * 1.000003 + p.z() * 1.000007
-        idxs = sorted({k * max(nv - 1, 0) // 7 for k in range(8)}) if nv else []
+        idxs = sorted({k * max(nv - 1, 0) // 31 for k in range(32)}) if nv else []
         samples = [(i, (verts[i].position.x(), verts[i].position.y(),
                         verts[i].position.z())) for i in idxs]
         entry = {"fp": fp, "vkey": vkey,

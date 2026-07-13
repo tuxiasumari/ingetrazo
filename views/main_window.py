@@ -1194,6 +1194,18 @@ class MainWindow(QMainWindow):
 
         return dlg, cb
 
+    def _prepare_import_display(self, cmd, cb) -> None:
+        """Pre-build the render/pick caches of freshly imported groups while
+        the progress dialog is still up — otherwise the first orbit after a
+        big import freezes ~5 s building them."""
+        for g in getattr(cmd, "added_groups", []):
+            cb(0.97, "Preparing display…")
+            try:
+                self.viewport._group_chunk(g)
+            except Exception:  # noqa: BLE001 — display cache only; never fatal
+                pass
+        cb(1.0, "Done")
+
     def _on_import_dae(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(
             self, tr("Import DAE"), "",
@@ -1202,13 +1214,15 @@ class MainWindow(QMainWindow):
             return
         path = Path(path_str)
         dlg, cb = self._import_progress(tr("Importing {name}…", name=path.name))
+        cmd = SnapshotImport(
+            lambda scene: dae_format.load_dae(scene, path, progress=cb))
         try:
-            self.viewport.history.execute(SnapshotImport(
-                lambda scene: dae_format.load_dae(scene, path, progress=cb)))
+            self.viewport.history.execute(cmd)
         except Exception as exc:  # noqa: BLE001
             dlg.close()
             QMessageBox.critical(self, tr("Import DAE failed"), str(exc))
             return
+        self._prepare_import_display(cmd, cb)
         dlg.close()
         self.viewport.update()
         self.statusBar().showMessage(tr("Imported {name}", name=path.name), 3000)
@@ -1220,13 +1234,15 @@ class MainWindow(QMainWindow):
             return
         path = Path(path_str)
         dlg, cb = self._import_progress(tr("Importing {name}…", name=path.name))
+        cmd = SnapshotImport(
+            lambda scene: obj_format.load_obj(scene, path, progress=cb))
         try:
-            self.viewport.history.execute(SnapshotImport(
-                lambda scene: obj_format.load_obj(scene, path, progress=cb)))
+            self.viewport.history.execute(cmd)
         except Exception as exc:  # noqa: BLE001
             dlg.close()
             QMessageBox.critical(self, tr("Import OBJ failed"), str(exc))
             return
+        self._prepare_import_display(cmd, cb)
         dlg.close()
         self.viewport.update()
         self.statusBar().showMessage(tr("Imported {name}", name=path.name), 3000)
