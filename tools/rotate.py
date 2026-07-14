@@ -189,9 +189,12 @@ class RotateTool(Tool):
             return
         m = rotation_matrix(self.start_point, self._axis(), step_deg)
         if self._group is not None:
-            gmesh = self._group.mesh
-            for vx in list(gmesh.vertices):
-                gmesh.move_vertex(vx, m.map(vx.position) - vx.position)
+            if getattr(self._group, "xform", None) is not None:
+                self._group.xform = m * self._group.xform   # instance: O(1)
+            else:
+                gmesh = self._group.mesh
+                for vx in list(gmesh.vertices):
+                    gmesh.move_vertex(vx, m.map(vx.position) - vx.position)
         else:
             for vx in self._verts:
                 viewport.scene.mesh.move_vertex(

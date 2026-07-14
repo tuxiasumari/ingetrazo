@@ -76,6 +76,12 @@ class _Dae:
         self._src_cache: dict = {}
         self._uv_cache: dict = {}
         self._img_alpha: dict = {}
+        self._polys_cache: dict = {}
+        # How many times each library node is instanced — reused targets are
+        # SketchUp components and import as shared-prototype instances.
+        from collections import Counter
+        self.inst_counts = Counter(
+            (el.get("url") or "") for el in root.iter(f"{_NS}instance_node"))
         self.by_id: dict = {}
         for el in root.iter():
             i = el.get("id")
@@ -94,6 +100,31 @@ class _Dae:
 
     def ref(self, url: str):
         return self.by_id.get((url or "").lstrip("#"))
+
+    def polys_of(self, node_el, depth: int = 0) -> int:
+        cached = self._polys_cache.get(id(node_el))
+        if cached is None:
+            cached = self._polys_cache[id(node_el)] = _subtree_count(
+                self, node_el, depth)
+        return cached
+
+    def zup_matrix(self) -> QMatrix4x4:
+        """:meth:`to_zup` as a matrix (unit scale + axis permutation) — used
+        to conjugate instance transforms into Z-up space."""
+        s = self.scale
+        if self.up == "Y_UP":
+            return QMatrix4x4(s, 0, 0, 0,
+                              0, 0, -s, 0,
+                              0, s, 0, 0,
+                              0, 0, 0, 1)
+        if self.up == "X_UP":
+            return QMatrix4x4(0, s, 0, 0,
+                              s, 0, 0, 0,
+                              0, 0, s, 0,
+                              0, 0, 0, 1)
+        m = QMatrix4x4()
+        m.scale(s)
+        return m
 
     def to_zup(self, p: QVector3D) -> QVector3D:
         s = self.scale
@@ -472,11 +503,14 @@ def _looks_faceme(dae: _Dae, loops) -> bool:
 
 
 def _collect(dae: _Dae, node_el, xform: QMatrix4x4, out: list,
-             depth: int = 0, faceme: list | None = None) -> None:
+             depth: int = 0, faceme: list | None = None,
+             instances: list | None = None) -> None:
     """Walk a node tree, baking transforms; instances recurse into
     ``library_nodes`` (SketchUp components). With ``faceme`` given, a child
     component whose geometry is a face-me silhouette is pulled out into it
-    as ``(name, loops)`` instead of flattening into the parent."""
+    as ``(name, loops)`` instead of flattening into the parent. With
+    ``instances`` given, a reused component worth sharing is pulled out as
+    ``(name, target_node, pre_xform, depth)`` instead of baking a copy."""
     if depth > 32:
         return                                     # cyclic instance guard
     m = xform * _node_matrix(node_el)
@@ -490,17 +524,25 @@ def _collect(dae: _Dae, node_el, xform: QMatrix4x4, out: list,
         elif t == "instance_node":
             target = dae.ref(el.get("url"))
             d2 = depth + 1
+            if target is not None and instances is not None:
+                cnt = dae.inst_counts.get(el.get("url") or "", 1)
+                polys = dae.polys_of(target, d2)
+                if cnt >= 2 and polys >= _INST_MIN_POLYS \
+                        and polys * (cnt - 1) >= _INST_MIN_SAVED:
+                    instances.append((el.get("name") or _node_label(target),
+                                      target, m, d2))
+                    continue
         if target is None:
             continue
         if faceme is not None:
             sub: list = []
-            _collect(dae, target, m, sub, d2, faceme)
+            _collect(dae, target, m, sub, d2, faceme, instances)
             if sub and _looks_faceme(dae, sub):
                 faceme.append((el.get("name") or _node_label(target), sub))
             else:
                 out.extend(sub)
         else:
-            _collect(dae, target, m, out, d2)
+            _collect(dae, target, m, out, d2, None, instances)
 
 
 def _prim_count(prim) -> int:
@@ -544,6 +586,18 @@ def _subtree_count(dae: _Dae, node_el, depth: int = 0) -> int:
     return n
 
 
+_UNBUILT = object()   # sentinel: component prototype not built yet
+
+# A reused component is pulled out as a shared instance only when sharing
+# saves at least _INST_MIN_SAVED polygons ((copies - 1) x polys) AND the
+# component itself is at least _INST_MIN_POLYS — a 1-face leaf repeated 900
+# times would otherwise become 900 groups of per-group overhead; micro
+# components stay flattened into their parent (and when the PARENT tree is
+# itself a reused component, they are flattened into its prototype once).
+_INST_MIN_SAVED = 400
+_INST_MIN_POLYS = 60
+
+
 # Reference imports mirror SketchUp's group structure: every DAE assembly
 # (group / component instance) can become its own Group, so the user selects,
 # moves and edits a farola or a pérgola as a unit instead of one monolithic
@@ -559,7 +613,8 @@ def _node_label(node_el) -> str:
     return node_el.get("name") or node_el.get("id") or "node"
 
 
-def _bucketize(dae: _Dae, top_nodes, faceme: list | None = None) -> list:
+def _bucketize(dae: _Dae, top_nodes, faceme: list | None = None,
+               instances: list | None = None) -> list:
     """Split the visual scene into ``(name, loops)`` buckets along the DAE
     node hierarchy (SketchUp groups/components). Returns at most
     ``_MAX_GROUPS`` buckets, largest assemblies split first. Face-me
@@ -570,16 +625,19 @@ def _bucketize(dae: _Dae, top_nodes, faceme: list | None = None) -> list:
     # Heap entries: (-tris, tie, kind, node_el, xform, depth, name)
     # kind "subtree": xform is the PRE-entry matrix (node's own applies at
     # collect). kind "direct": xform is the composed matrix, no recursion.
+    # via_inst marks entries that came through an instance_node — a target
+    # reached that way ≥2 times is a SketchUp component: its geometry is
+    # built ONCE and every copy becomes a shared-prototype instance.
     heap = []
     for nd in top_nodes:
         n = _subtree_count(dae, nd)
         if n > 0:
             heapq.heappush(heap, (-n, next(tie), "subtree", nd,
-                                  QMatrix4x4(), 0, _node_label(nd)))
+                                  QMatrix4x4(), 0, _node_label(nd), False))
     final: list = []
     while heap and (len(final) + len(heap)) < _MAX_GROUPS:
         entry = heapq.heappop(heap)
-        neg, _t, kind, node_el, xform, depth, name = entry
+        neg, _t, kind, node_el, xform, depth, name, _via = entry
         if -neg <= _SPLIT_MIN:
             heapq.heappush(heap, entry)
             break                      # largest left is small: all are done
@@ -592,12 +650,12 @@ def _bucketize(dae: _Dae, top_nodes, faceme: list | None = None) -> list:
         dg = _direct_count(dae, node_el)
         if dg > 0:
             heapq.heappush(heap, (-dg, next(tie), "direct", node_el, m,
-                                  depth, name))
+                                  depth, name, False))
         for el in kids:
             n = _subtree_count(dae, el, depth)
             if n > 0:
                 heapq.heappush(heap, (-n, next(tie), "subtree", el, m,
-                                      depth, _node_label(el)))
+                                      depth, _node_label(el), False))
         for el in insts:
             target = dae.ref(el.get("url"))
             if target is None:
@@ -606,14 +664,23 @@ def _bucketize(dae: _Dae, top_nodes, faceme: list | None = None) -> list:
             if n > 0:
                 nm = el.get("name") or _node_label(target)
                 heapq.heappush(heap, (-n, next(tie), "subtree", target, m,
-                                      depth + 1, nm))
+                                      depth + 1, nm, True))
+    entries = sorted(final + heap)
+    bucket_inst: dict = {}
+    for _neg, _t, kind, node_el, _x, _d, _nm, via in entries:
+        if via and kind == "subtree":
+            bucket_inst[id(node_el)] = bucket_inst.get(id(node_el), 0) + 1
     buckets = []
-    for neg, _t, kind, node_el, xform, depth, name in sorted(final + heap):
+    for neg, _t, kind, node_el, xform, depth, name, via in entries:
+        if (instances is not None and via and kind == "subtree"
+                and bucket_inst.get(id(node_el), 0) >= 2):
+            instances.append((name, node_el, xform, depth))
+            continue
         loops: list = []
         if kind == "direct":
             _collect_direct(dae, node_el, xform, loops)
         else:
-            _collect(dae, node_el, xform, loops, depth, faceme)
+            _collect(dae, node_el, xform, loops, depth, faceme, instances)
             if faceme is not None and loops and _looks_faceme(dae, loops):
                 faceme.append((name, loops))   # the bucket itself is a sprite
                 continue
@@ -661,28 +728,77 @@ def load_dae(scene, path, progress=None) -> None:
         from formats.fuse import fuse_coplanar_loops, soften_smooth_edges
         tick(0.1, "Collecting geometry…")
         faceme: list = []
-        buckets = _bucketize(dae, top_nodes, faceme)
-        if not buckets and not faceme:
+        instances: list = []
+        buckets = _bucketize(dae, top_nodes, faceme, instances)
+        if not buckets and not faceme and not instances:
             raise ValueError("No geometry found in the COLLADA file")
-        total_loops = max(sum(len(lp) for _n, lp in buckets + faceme), 1)
-        done = 0
-        for is_sprite, name, loops in (
-                [(False, n, lp) for n, lp in buckets]
-                + [(True, n, lp) for n, lp in faceme]):
-            tick(0.15 + 0.8 * done / total_loops, f"Building {name}…")
+
+        def build_mesh(loops, local: bool = False):
             raw = []
             for loop, color, tex in loops:
                 zpts = [dae.to_zup(p) for p in loop]
                 raw.append((zpts, _face_attrs(zpts, color, tex)))
-            fused = fuse_coplanar_loops(raw)
             target = Mesh()
-            for item in fused:
+            for item in fuse_coplanar_loops(raw):
                 _add_fused(target, [item])
             soften_smooth_edges(target)
+            return target
+
+        zm = dae.zup_matrix()
+        zm_inv = zm.inverted()[0]
+        n_polys = sum(len(lp) for _n, lp in buckets)
+        n_polys += sum(dae.polys_of(t[1], t[3]) for t in instances)
+        n_polys += sum(len(lp) for _n, lp in faceme)
+        total_loops = max(n_polys, 1)
+        done = 0
+        for name, loops in buckets:
+            tick(0.15 + 0.8 * done / total_loops, f"Building {name}…")
+            target = build_mesh(loops)
+            if target.faces:
+                scene.groups.append(Group(target, name=name))
+            done += len(loops)
+        # SketchUp components (a reused library node, found at any depth):
+        # ONE prototype mesh in Z-up LOCAL coordinates, shared by every copy;
+        # each copy is a Group with only a local->world matrix. A component
+        # carrying a face-me sprite inside falls back to per-copy geometry
+        # (the sprite must be extracted at its world spot).
+        protos: dict = {}      # id(node_el) -> Mesh | None (None = fallback)
+        for name, node_el, xform, depth in instances:
+            tick(0.15 + 0.8 * done / total_loops, f"Building {name}…")
+            done += dae.polys_of(node_el, depth)
+            proto = protos.get(id(node_el), _UNBUILT)
+            if proto is _UNBUILT:
+                probe: list = []
+                local_loops: list = []
+                _collect(dae, node_el, QMatrix4x4(), local_loops,
+                         depth, probe)
+                if probe:
+                    proto = None           # sprites inside: per-copy fallback
+                else:
+                    proto = build_mesh(local_loops)
+                    if not proto.faces:
+                        proto = None
+                protos[id(node_el)] = proto
+            if proto is not None:
+                g = Group(proto, name=name)
+                g.xform = zm * xform * zm_inv
+                scene.groups.append(g)
+                continue
+            # Fallback: bake this copy in world coords (sprites and all).
+            loops = []
+            _collect(dae, node_el, xform, loops, depth, faceme)
+            if loops and _looks_faceme(dae, loops):
+                faceme.append((name, loops))
+                continue
+            target = build_mesh(loops)
+            if target.faces:
+                scene.groups.append(Group(target, name=name))
+        for name, loops in faceme:
+            tick(0.15 + 0.8 * done / total_loops, f"Building {name}…")
+            target = build_mesh(loops)
             if target.faces:
                 g = Group(target, name=name)
-                if is_sprite:
-                    g.billboard = "mesh"   # geometry turns toward the camera
+                g.billboard = "mesh"   # geometry turns toward the camera
                 scene.groups.append(g)
             done += len(loops)
         scene.version += 1

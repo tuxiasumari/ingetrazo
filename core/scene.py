@@ -97,9 +97,13 @@ class Scene:
     # ---- Group-edit context (Groups v2) --------------------------------------
     def begin_group_edit(self, group) -> None:
         """Enter a group: tools and commands now edit ITS mesh (SketchUp's
-        double-click-into-group). Nested groups are not supported yet."""
+        double-click-into-group). Nested groups are not supported yet.
+        Entering a component INSTANCE first makes it unique (materialize) —
+        its prototype mesh is shared with siblings and holds local coords."""
         if self.edit_group is not None:
             self.end_group_edit()
+        if getattr(group, "xform", None) is not None:
+            group.materialize()
         self._loose_mesh = self.mesh
         self.mesh = group.mesh
         self.edit_group = group
@@ -186,18 +190,31 @@ class Scene:
             self.version += 1
 
     # ---- Queries ------------------------------------------------------------
+    def iter_world_faces(self):
+        """Every visible face with the matrix that maps it to WORLD space:
+        ``(face, matrix_or_None)``. Instance groups share a prototype mesh in
+        local coordinates — exporters and geometry consumers must apply the
+        matrix; classic faces come with ``None``."""
+        for f in self.loose_mesh.faces:
+            if self.entity_visible(f):
+                yield f, None
+        for g in self.groups:
+            if not self.entity_visible(g) or getattr(g, "billboard", False):
+                continue
+            m = getattr(g, "xform", None)
+            for f in g.mesh.faces:
+                yield f, m
+
     def bounds(self) -> tuple[QVector3D, QVector3D] | tuple[None, None]:
         """Axis-aligned bounding box of all geometry. ``(None, None)`` if empty."""
-        edges = list(self.render_edges())
-        faces = list(self.render_faces())
-        if not edges and not faces:
-            return None, None
         inf = float("inf")
         minx = miny = minz = inf
         maxx = maxy = maxz = -inf
+        seen = False
 
         def absorb(v: QVector3D) -> None:
-            nonlocal minx, miny, minz, maxx, maxy, maxz
+            nonlocal minx, miny, minz, maxx, maxy, maxz, seen
+            seen = True
             x, y, z = v.x(), v.y(), v.z()
             if x < minx: minx = x
             if y < miny: miny = y
@@ -206,10 +223,40 @@ class Scene:
             if y > maxy: maxy = y
             if z > maxz: maxz = z
 
-        for edge in edges:
-            absorb(edge.a)
-            absorb(edge.b)
-        for face in faces:
-            for v in face.vertices:
-                absorb(v)
+        def absorb_mesh(mesh) -> None:
+            for edge in mesh.edges:
+                absorb(edge.a)
+                absorb(edge.b)
+            for face in mesh.faces:
+                for v in face.vertices:
+                    absorb(v)
+
+        for edge in self.loose_mesh.edges:
+            if self.entity_visible(edge):
+                absorb(edge.a)
+                absorb(edge.b)
+        for face in self.loose_mesh.faces:
+            if self.entity_visible(face):
+                for v in face.vertices:
+                    absorb(v)
+        for g in self.groups:
+            if not self.entity_visible(g):
+                continue
+            m = getattr(g, "xform", None)
+            if m is None:
+                absorb_mesh(g.mesh)
+                continue
+            # Instance: transform the prototype's bbox corners to world.
+            verts = g.mesh.vertices
+            if not verts:
+                continue
+            xs = [v.position.x() for v in verts]
+            ys = [v.position.y() for v in verts]
+            zs = [v.position.z() for v in verts]
+            for cx in (min(xs), max(xs)):
+                for cy in (min(ys), max(ys)):
+                    for cz in (min(zs), max(zs)):
+                        absorb(m.map(QVector3D(cx, cy, cz)))
+        if not seen:
+            return None, None
         return QVector3D(minx, miny, minz), QVector3D(maxx, maxy, maxz)

@@ -33,6 +33,7 @@ from PySide6.QtGui import QVector3D
 
 from core.dimension import Dimension
 from core.group import Group
+from core.mesh import Mesh
 from georef.datum import SceneDatum
 from georef.geopath import GeoPath
 
@@ -90,8 +91,22 @@ def save_scene(scene, path: Path) -> None:
     groups = getattr(scene, "groups", None)
     if groups:
         payload["groups"] = []
+        # Component prototypes: each shared instance mesh is written ONCE.
+        proto_index: dict = {}
+        protos: list = []
         for g in groups:
-            entry = _mesh_json(g.mesh)
+            if getattr(g, "xform", None) is not None \
+                    and id(g.mesh) not in proto_index:
+                proto_index[id(g.mesh)] = len(protos)
+                protos.append(_mesh_json(g.mesh))
+        if protos:
+            payload["protos"] = protos
+        for g in groups:
+            if getattr(g, "xform", None) is not None:
+                entry = {"proto": proto_index[id(g.mesh)],
+                         "xform": [float(x) for x in g.xform.data()]}
+            else:
+                entry = _mesh_json(g.mesh)
             if getattr(g, "layer", None) is not None:
                 entry["layer"] = g.layer
             if getattr(g, "ifc", None):
@@ -159,9 +174,22 @@ def load_into(scene, path: Path) -> None:
         scene.layers = [Layer.from_dict(r) for r in raw_layers]
         if not any(ly.name == DEFAULT_LAYER for ly in scene.layers):
             scene.layers.insert(0, Layer(DEFAULT_LAYER))
+    proto_meshes: list = []
+    for raw in payload.get("protos", []):
+        m = Mesh()
+        _load_mesh(m, raw)
+        proto_meshes.append(m)
     for raw in payload.get("groups", []):
-        group = Group()
-        _load_mesh(group.mesh, raw)
+        if raw.get("xform") is not None and "proto" in raw:
+            from PySide6.QtGui import QMatrix4x4
+            group = Group(proto_meshes[int(raw["proto"])])
+            vals = [float(x) for x in raw["xform"]]
+            # data() is column-major; the constructor takes row-major.
+            rm = [vals[col * 4 + row] for row in range(4) for col in range(4)]
+            group.xform = QMatrix4x4(*rm)
+        else:
+            group = Group()
+            _load_mesh(group.mesh, raw)
         if raw.get("layer"):
             group.layer = raw["layer"]
         if raw.get("ifc"):

@@ -327,3 +327,122 @@ def test_opaque_photo_panel_stays_static(tmp_path):
     load_dae(scene, tmp_path / "textured.dae")
     assert not scene.groups                        # brick.png has no cutout
     assert len(scene.mesh.faces) == 1
+
+
+def test_repeated_components_share_one_prototype(tmp_path, monkeypatch):
+    """A component instanced several times imports as SHARED-prototype
+    instance groups: one mesh, N transforms — the memory lever for big
+    SketchUp files. Moving one instance must not touch its siblings."""
+    quad = """
+    <geometry id="quad"><mesh>
+      <source id="qp"><float_array id="qpa" count="12">0 0 0  1 0 0  1 1 0  0 1 0</float_array>
+        <technique_common><accessor source="#qpa" count="4" stride="3"/></technique_common>
+      </source>
+      <vertices id="qv"><input semantic="POSITION" source="#qp"/></vertices>
+      <polylist count="2">
+        <input semantic="VERTEX" source="#qv" offset="0"/>
+        <vcount>3 3</vcount><p>0 1 2 0 2 3</p>
+      </polylist>
+    </mesh></geometry>"""
+    body = f"""<?xml version="1.0"?>
+<COLLADA {_NSDECL} version="1.4.1">
+  <asset><up_axis>Z_UP</up_axis></asset>
+  <library_geometries>{quad}</library_geometries>
+  <library_nodes>
+    <node id="comp" name="banca"><instance_geometry url="#quad"/></node>
+  </library_nodes>
+  <library_visual_scenes>
+    <visual_scene id="scene">
+      <node id="root" name="SketchUp">
+        <node id="i1"><instance_node url="#comp"/></node>
+        <node id="i2"><translate>10 0 0</translate><instance_node url="#comp"/></node>
+        <node id="i3"><translate>20 0 0</translate><instance_node url="#comp"/></node>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+</COLLADA>
+"""
+    p = tmp_path / "bancas.dae"
+    p.write_text(body)
+    import formats.dae as dae_mod
+    monkeypatch.setattr(dae_mod, "_MAX_FUSE_LOOPS", 2)
+    monkeypatch.setattr(dae_mod, "_SPLIT_MIN", 1)
+    scene = Scene()
+    load_dae(scene, p)
+    inst = [g for g in scene.groups if g.xform is not None]
+    assert len(inst) == 3
+    assert len({id(g.mesh) for g in inst}) == 1        # ONE shared prototype
+    assert len(inst[0].mesh.faces) == 1                # fused quad, local coords
+    # world positions come from the transforms
+    from PySide6.QtGui import QVector3D
+    origins = sorted(round(g.xform.map(QVector3D(0, 0, 0)).x(), 3)
+                     for g in inst)
+    assert origins == [0.0, 10.0, 20.0]
+
+    # moving ONE instance leaves the siblings (and the prototype) untouched
+    from core.history import History, MoveGroupCommand
+    hist = History(scene)
+    hist.execute(MoveGroupCommand(inst[0], QVector3D(0, 5, 0)))
+    assert round(inst[0].xform.map(QVector3D(0, 0, 0)).y(), 3) == 5.0
+    assert round(inst[1].xform.map(QVector3D(0, 0, 0)).y(), 3) == 0.0
+    assert inst[0].mesh is inst[1].mesh                # still shared
+    hist.undo()
+    assert round(inst[0].xform.map(QVector3D(0, 0, 0)).y(), 3) == 0.0
+
+    # igz round-trip keeps the sharing
+    from formats import igz
+    out = tmp_path / "bancas.igz"
+    igz.save_scene(scene, out)
+    scene2 = Scene()
+    igz.load_into(scene2, out)
+    inst2 = [g for g in scene2.groups if g.xform is not None]
+    assert len(inst2) == 3
+    assert len({id(g.mesh) for g in inst2}) == 1
+    origins2 = sorted(round(g.xform.map(QVector3D(0, 0, 0)).x(), 3)
+                      for g in inst2)
+    assert origins2 == [0.0, 10.0, 20.0]
+
+    # materialize (make unique) detaches only that copy, in world coords
+    g = inst2[1]
+    g.materialize()
+    assert g.xform is None
+    assert g.mesh is not inst2[0].mesh
+    xs = sorted({round(v.position.x(), 3) for v in g.mesh.vertices})
+    assert xs[0] in (0.0, 10.0, 20.0) and xs[-1] - xs[0] == 1.0
+
+
+def test_instance_edit_flows_make_unique():
+    """Entering an instance materializes it (make unique); exploding an
+    instance lands its geometry at the WORLD position."""
+    from PySide6.QtGui import QMatrix4x4, QVector3D
+    from core.group import Group
+    from core.mesh import Mesh
+    from core.history import History, ExplodeGroupCommand
+
+    scene = Scene()
+    proto = Mesh()
+    proto.add_face([QVector3D(0, 0, 0), QVector3D(1, 0, 0),
+                    QVector3D(1, 1, 0), QVector3D(0, 1, 0)])
+    g1, g2 = Group(proto, name="a"), Group(proto, name="b")
+    m = QMatrix4x4(); m.translate(10, 0, 0)
+    g1.xform = QMatrix4x4()
+    g2.xform = m
+    scene.groups.extend([g1, g2])
+
+    # enter-to-edit materializes only that copy
+    scene.begin_group_edit(g2)
+    assert g2.xform is None and g2.mesh is not proto
+    assert scene.mesh is g2.mesh
+    xs = {round(v.position.x(), 3) for v in g2.mesh.vertices}
+    assert xs == {10.0, 11.0}
+    scene.end_group_edit()
+    assert g1.mesh is proto and g1.xform is not None   # sibling untouched
+
+    # exploding an instance drops world-space geometry into the loose mesh
+    hist = History(scene)
+    hist.execute(ExplodeGroupCommand(g1))
+    assert g1 not in scene.groups
+    xs = {round(v.position.x(), 3) for v in scene.mesh.vertices}
+    assert xs == {0.0, 1.0}
+    hist.undo()
+    assert g1 in scene.groups and not scene.mesh.faces

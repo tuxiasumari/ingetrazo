@@ -36,12 +36,15 @@ def _bind(vp):
     vp._LIGHT = Viewport._LIGHT
     vp.active_tool = None
     vp._mesh_fingerprint = Viewport._mesh_fingerprint  # staticmethod
+    vp._translation_probe = Viewport._translation_probe
+    vp._samples_match = Viewport._samples_match
     for name in ("_pick_index", "_ray_hits", "_hover_face_t", "pick_face",
                  "pick_face_any", "pick_edge", "pick_vertex", "_project_px",
                  "_np_mvp", "_group_chunk", "_append_textured_face",
                  "_shaded_color", "_group_fp", "_gedge_screen",
                  "_nearby_group_edges", "_snap_scene",
-                 "_billboard_snap_edges", "_billboard_quad"):
+                 "_billboard_snap_edges", "_billboard_quad",
+                 "_instance_chunk", "_shift_instance_entry"):
         setattr(vp, name, getattr(Viewport, name).__get__(vp))
     return vp
 
@@ -137,3 +140,39 @@ def test_snap_reaches_group_geometry():
     # far from the model: no pseudo-edges, plain scene comes back
     far = vp._nearby_group_edges(-10_000.0, -10_000.0)
     assert far == []
+
+
+def test_instance_groups_pick_through_transformed_chunks():
+    """Two component instances share ONE prototype mesh; picking hits each
+    at its transformed world spot, and updating one instance's transform
+    moves only that copy."""
+    from PySide6.QtGui import QMatrix4x4
+
+    scene = Scene()
+    proto = __import__("core.mesh", fromlist=["Mesh"]).Mesh()
+    proto.add_face([V(0, 0), V(1, 0), V(1, 1), V(0, 1)])
+    from core.group import Group
+    g1, g2 = Group(proto, name="i1"), Group(proto, name="i2")
+    m1 = QMatrix4x4()
+    m2 = QMatrix4x4(); m2.translate(10, 0, 0)
+    g1.xform, g2.xform = m1, m2
+    scene.groups.extend([g1, g2])
+    scene.version += 1
+
+    vp = _bind(_VP(scene))
+    vp._pixel_to_ray = lambda sx, sy: _ray_down(sx, sy)
+    f, grp = vp.pick_face_any(0.5, 0.5)
+    assert grp is g1 and f in proto.faces
+    f, grp = vp.pick_face_any(10.5, 0.5)
+    assert grp is g2
+    assert vp.pick_face_any(5.0, 0.5) == (None, None)   # empty gap between
+
+    # move instance 2: pick follows the new transform, sibling untouched
+    m2b = QMatrix4x4(); m2b.translate(20, 0, 0)
+    g2.xform = m2b
+    scene.version += 1
+    assert vp.pick_face_any(10.5, 0.5) == (None, None)
+    f, grp = vp.pick_face_any(20.5, 0.5)
+    assert grp is g2
+    f, grp = vp.pick_face_any(0.5, 0.5)
+    assert grp is g1

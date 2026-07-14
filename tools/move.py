@@ -178,8 +178,14 @@ class MoveTool(Tool):
         grabbed vertex objects (identity-exact: apply and revert stay symmetric
         even when the drag crosses another vertex's position)."""
         if self._group is not None:
-            for v in list(self._group.mesh.vertices):
-                self._group.mesh.move_vertex(v, step)
+            if getattr(self._group, "xform", None) is not None:
+                from PySide6.QtGui import QMatrix4x4
+                t = QMatrix4x4()
+                t.translate(step)
+                self._group.xform = t * self._group.xform   # instance: O(1)
+            else:
+                for v in list(self._group.mesh.vertices):
+                    self._group.mesh.move_vertex(v, step)
         else:
             for v in self._verts:
                 viewport.scene.mesh.move_vertex(v, step)

@@ -17,9 +17,22 @@ from PySide6.QtGui import QVector3D
 
 
 def _faces(scene):
-    """Every renderable face: loose mesh + groups (already world-space)."""
+    """Every renderable face in WORLD space: loose mesh + groups. Component
+    instances share a prototype mesh in local coordinates, so their faces
+    come from a transformed copy."""
     if hasattr(scene, "render_faces"):
-        yield from scene.render_faces()
+        groups = getattr(scene, "groups", [])
+        if not any(getattr(g, "xform", None) is not None for g in groups):
+            yield from scene.render_faces()
+            return
+        from core.group import world_mesh
+        for f in scene.loose_mesh.faces:
+            if scene.entity_visible(f):
+                yield f
+        for g in groups:
+            if not scene.entity_visible(g) or getattr(g, "billboard", False):
+                continue
+            yield from world_mesh(g).faces
     elif hasattr(scene, "mesh"):
         yield from scene.mesh.faces
     else:

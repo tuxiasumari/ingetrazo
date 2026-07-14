@@ -274,6 +274,15 @@ class PushPullTool(Tool):
             if face is None:
                 return
             self.base_face = face
+            if getattr(self._hover_group, "xform", None) is not None:
+                # Component instance: its prototype mesh is shared with
+                # siblings — a push here would edit them all with world/local
+                # coords mixed. Enter the group first (double-click), which
+                # makes the copy unique.
+                viewport.flash_status(tr(
+                    "Instance: double-click to enter the group first "
+                    "(makes this copy unique)"))
+                return
             self.extrusion = 0.0
             self.dragging = True
             self._group = self._hover_group
@@ -317,6 +326,11 @@ class PushPullTool(Tool):
         if not self.dragging:
             face, grp = viewport.pick_face_any(ctx.screen.x(), ctx.screen.y())
             if face is None:
+                return
+            if getattr(grp, "xform", None) is not None:
+                viewport.flash_status(tr(
+                    "Instance: double-click to enter the group first "
+                    "(makes this copy unique)"))
                 return
             self.base_face = face
             self.dragging = True

@@ -844,6 +844,11 @@ class RotateGroupCommand(Command):
         self._after: Optional[dict] = None
 
     def do(self, scene) -> None:
+        if getattr(self.group, "xform", None) is not None:
+            m = rotation_matrix(self.center, self.axis, self.degrees)
+            self.group.xform = m * self.group.xform
+            scene.version += 1
+            return
         gmesh = self.group.mesh
         if self._after is not None:  # redo
             gmesh.restore_state(self._after)
@@ -857,6 +862,11 @@ class RotateGroupCommand(Command):
         scene.version += 1
 
     def undo(self, scene) -> None:
+        if getattr(self.group, "xform", None) is not None:
+            m = rotation_matrix(self.center, self.axis, -self.degrees)
+            self.group.xform = m * self.group.xform
+            scene.version += 1
+            return
         if self._before is not None:
             self.group.mesh.restore_state(self._before)
             scene.version += 1
@@ -916,6 +926,11 @@ class ScaleGroupCommand(Command):
         self._after: Optional[dict] = None
 
     def do(self, scene) -> None:
+        if getattr(self.group, "xform", None) is not None:
+            self.group.xform = scale_matrix(self.center,
+                                            self.factor) * self.group.xform
+            scene.version += 1
+            return
         gmesh = self.group.mesh
         if self._after is not None:  # redo
             gmesh.restore_state(self._after)
@@ -929,6 +944,11 @@ class ScaleGroupCommand(Command):
         scene.version += 1
 
     def undo(self, scene) -> None:
+        if getattr(self.group, "xform", None) is not None:
+            self.group.xform = scale_matrix(self.center,
+                                            1.0 / self.factor) * self.group.xform
+            scene.version += 1
+            return
         if self._before is not None:
             self.group.mesh.restore_state(self._before)
             scene.version += 1
@@ -1455,21 +1475,27 @@ class ExplodeGroupCommand(Command):
         m = scene.mesh
         self.snapshot = m.capture_state()
         self.index = scene.groups.index(self.group)
+        xf = getattr(self.group, "xform", None)
+
+        def W(p):
+            # Instance prototypes hold LOCAL coords — explode in world.
+            return xf.map(p) if xf is not None else QVector3D(p)
+
         for f in self.group.mesh.faces:
-            nf = m.add_face([QVector3D(v) for v in f.vertices],
-                            [[QVector3D(v) for v in h] for h in f.holes] or None)
+            nf = m.add_face([W(v) for v in f.vertices],
+                            [[W(v) for v in h] for h in f.holes] or None)
             if f.attrs:
                 nf.attrs.update(dict(f.attrs))   # colour/texture travel back out
         for e in self.group.mesh.edges:
-            v0, v1 = m.vertex_at(e.a), m.vertex_at(e.b)
+            v0, v1 = m.vertex_at(W(e.a)), m.vertex_at(W(e.b))
             if v0 is None or v1 is None or m.find_edge(v0, v1) is None:
-                m.add_edge(QVector3D(e.a), QVector3D(e.b))
+                m.add_edge(W(e.a), W(e.b))
         # Soft/curve flags travel back out of the group (the mirror of
         # MakeGroupCommand): an exploded cylinder must stay smooth and its
         # rims keep selecting as whole curves.
         for e in self.group.mesh.edges:
             if getattr(e, "soft", False) or getattr(e, "curve", None) is not None:
-                v0, v1 = m.vertex_at(e.a), m.vertex_at(e.b)
+                v0, v1 = m.vertex_at(W(e.a)), m.vertex_at(W(e.b))
                 k = (m.find_edge(v0, v1)
                      if v0 is not None and v1 is not None else None)
                 if k is not None:
@@ -1494,8 +1520,16 @@ class MoveGroupCommand(Command):
         self.delta = QVector3D(delta)
 
     def _shift(self, scene, delta) -> None:
-        for v in list(self.group.mesh.vertices):
-            self.group.mesh.move_vertex(v, delta)
+        if getattr(self.group, "xform", None) is not None:
+            # Component instance: compose into the transform — O(1), and the
+            # shared prototype mesh (siblings!) is never touched.
+            from PySide6.QtGui import QMatrix4x4
+            t = QMatrix4x4()
+            t.translate(delta)
+            self.group.xform = t * self.group.xform
+        else:
+            for v in list(self.group.mesh.vertices):
+                self.group.mesh.move_vertex(v, delta)
         scene.version += 1
 
     def do(self, scene) -> None:

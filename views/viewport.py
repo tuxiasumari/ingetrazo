@@ -2664,12 +2664,137 @@ class Viewport(QOpenGLWidget):
             entry["tri_pos"] = tp
         return tp
 
+    def _instance_chunk(self, group):
+        """Chunk of a component INSTANCE: the shared prototype's chunk (built
+        once per prototype mesh, in local coordinates) transformed to world by
+        ``group.xform``. Cached per instance and re-derived only when the
+        transform or the prototype changes; a pure translation delta shifts
+        the cached arrays instead of re-transforming."""
+        import numpy as np
+        mesh = group.mesh
+        wrappers = getattr(self, "_proto_wrappers", None)
+        if wrappers is None:
+            wrappers = self._proto_wrappers = {}
+        w = wrappers.get(id(mesh))
+        if w is None:
+            from types import SimpleNamespace
+            w = wrappers[id(mesh)] = SimpleNamespace(mesh=mesh, xform=None)
+        base = self._group_chunk(w)
+        xf = group.xform
+        key = (id(base), tuple(xf.data()))
+        cache = getattr(self, "_inst_chunks", None)
+        if cache is None:
+            cache = self._inst_chunks = {}
+        cur = cache.get(id(group))
+        if cur is not None and cur["ikey"] == key:
+            return cur
+        if cur is not None and cur["ikey"][0] == id(base):
+            old, new = cur["ikey"][1], key[1]
+            # QMatrix4x4.data() is column-major: translation at 12/13/14.
+            lin = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15)
+            if all(abs(old[i] - new[i]) < 1e-12 for i in lin):
+                d = QVector3D(new[12] - old[12], new[13] - old[13],
+                              new[14] - old[14])
+                self._shift_instance_entry(cur, d)
+                cur["ikey"] = key
+                cur["rev"] += 1
+                return cur
+        m = np.array(xf.data(), dtype=np.float64).reshape(4, 4, order="F")
+        L, t = m[:3, :3], m[:3, 3]
+
+        def tp(a):                       # positions
+            return a @ L.T + t
+
+        def tv(a):                       # direction vectors (no translation)
+            return a @ L.T
+
+        def tp32(raw, stride, cols=3):
+            a = np.frombuffer(raw, np.float32).reshape(-1, stride).copy()
+            a[:, :cols] = tp(a[:, :cols].astype(np.float64)).astype(np.float32)
+            return a.tobytes()
+
+        det = float(np.linalg.det(L))
+        try:
+            n_mat = np.linalg.inv(L).T
+        except np.linalg.LinAlgError:
+            n_mat = np.eye(3)
+
+        def tn(a):                       # unit normals
+            if not len(a):
+                return a
+            out = a @ n_mat.T
+            ln = np.linalg.norm(out, axis=1, keepdims=True)
+            return out / np.where(ln > 1e-12, ln, 1.0)
+
+        sp = base["soft_pts"]
+        if sp is not None:
+            s6 = sp.reshape(-1, 6).astype(np.float64)
+            s6[:, 0:3] = tp(s6[:, 0:3])
+            s6[:, 3:6] = tp(s6[:, 3:6])
+            sp = s6.astype(np.float32)
+        entry = {
+            "ikey": key,
+            "rev": (cur["rev"] + 1) if cur is not None else 0,
+            "nv": base["nv"], "ne": base["ne"], "nf": base["nf"],
+            "edges": tp32(base["edges"], 3),
+            "vcol": tp32(base["vcol"], 6),
+            "by_texture": {p: tp32(raw, 5)
+                           for p, raw in base["by_texture"].items()},
+            "faces": base["faces"],
+            "areas": base["areas"] * (abs(det) ** (2.0 / 3.0)),
+            "v0": tp(base["v0"]) if base["v0"] is not None else None,
+            "e1": tv(base["e1"]) if base["e1"] is not None else None,
+            "e2": tv(base["e2"]) if base["e2"] is not None else None,
+            "tri_ent": base["tri_ent"],
+            "tri_pos": None,
+            "soft_pts": sp,
+            "soft_n0": tn(base["soft_n0"]),
+            "soft_c0": (tp(base["soft_c0"]) if len(base["soft_c0"])
+                        else base["soft_c0"]),
+            "soft_n1": tn(base["soft_n1"]),
+            "soft_c1": (tp(base["soft_c1"]) if len(base["soft_c1"])
+                        else base["soft_c1"]),
+            "soft_single": base["soft_single"],
+        }
+        cache[id(group)] = entry
+        return entry
+
+    def _shift_instance_entry(self, entry, d: QVector3D) -> None:
+        """Translate a cached instance chunk in place (Move drag fast path)."""
+        import numpy as np
+        dx = np.array([d.x(), d.y(), d.z()])
+
+        def shift(raw, stride):
+            a = np.frombuffer(raw, np.float32).reshape(-1, stride).copy()
+            a[:, :3] += dx
+            return a.tobytes()
+
+        entry["edges"] = shift(entry["edges"], 3)
+        entry["vcol"] = shift(entry["vcol"], 6)
+        entry["by_texture"] = {p: shift(raw, 5)
+                               for p, raw in entry["by_texture"].items()}
+        if entry["v0"] is not None:
+            entry["v0"] = entry["v0"] + dx
+        if entry["soft_pts"] is not None:
+            s6 = entry["soft_pts"].reshape(-1, 6).copy()
+            s6[:, 0:3] += dx
+            s6[:, 3:6] += dx
+            entry["soft_pts"] = s6.astype(np.float32)
+        for kk in ("soft_c0", "soft_c1"):
+            if len(entry[kk]):
+                entry[kk] = entry[kk] + dx
+        entry["tri_pos"] = None
+
     def _group_chunk(self, group):
         """Cached render + pick payload of one group, keyed by its content
         fingerprint. A big imported reference model (17k faces) made EVERY
         stroke beside it pay a full VBO + pick-index rebuild (~1.5 s); with
         the chunk, untouched groups just re-concatenate, and a pure
-        translation (Move drag) shifts the arrays instead of rebuilding."""
+        translation (Move drag) shifts the arrays instead of rebuilding.
+        Component instances resolve to their prototype's chunk transformed
+        by the instance matrix."""
+        if getattr(group, "xform", None) is not None:
+            return self._instance_chunk(group)
         cache = getattr(self, "_group_chunks", None)
         if cache is None:
             cache = self._group_chunks = {}
