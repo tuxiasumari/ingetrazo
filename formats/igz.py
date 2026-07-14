@@ -97,7 +97,9 @@ def save_scene(scene, path: Path) -> None:
             if getattr(g, "ifc", None):
                 entry["ifc"] = dict(g.ifc)
             if getattr(g, "billboard", False):
-                entry["billboard"] = True
+                # True = legacy textured-quad face-me; "mesh" = imported
+                # silhouette whose real geometry turns toward the camera.
+                entry["billboard"] = g.billboard
             payload["groups"].append(entry)
     layers = getattr(scene, "layers", None)
     if layers is not None and (len(layers) > 1 or any(
@@ -165,7 +167,7 @@ def load_into(scene, path: Path) -> None:
         if raw.get("ifc"):
             group.ifc = dict(raw["ifc"])
         if raw.get("billboard"):
-            group.billboard = True
+            group.billboard = raw["billboard"]   # True | "mesh"
         scene.groups.append(group)
 
     for raw in payload.get("dimensions", []):

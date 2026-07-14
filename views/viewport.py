@@ -1407,7 +1407,10 @@ class Viewport(QOpenGLWidget):
         zs = [v.position.z() for v in verts]
         anchor = QVector3D((min(xs) + max(xs)) / 2,
                            (min(ys) + max(ys)) / 2, min(zs))
-        w = max(max(xs) - min(xs), max(ys) - min(ys))
+        # Planar width: hypot handles a sprite plane at any yaw (an imported
+        # face-me sits wherever its baked transform left it); an axis-aligned
+        # quad gives the same value as before.
+        w = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
         h = max(zs) - min(zs)
         tex = None
         for f in group.mesh.faces:
@@ -1440,6 +1443,11 @@ class Viewport(QOpenGLWidget):
         self._program.setUniformValue(self._loc_use_tex, 1)
         self._billboard_vao.bind()
         for g in groups:
+            if getattr(g, "billboard", False) == "mesh":
+                # Imported face-me silhouette: its REAL geometry (a cut
+                # outline, not a rectangle) turns toward the camera.
+                self._draw_faceme_mesh(g)
+                continue
             quad = self._billboard_quad(g)
             if quad is None:
                 continue
@@ -1494,6 +1502,76 @@ class Viewport(QOpenGLWidget):
         self._bb_sel_vao.bind()
         self._gl.glDrawArrays(GL_LINES, 0, len(data) // 3)
         self._bb_sel_vao.release()
+
+    def _faceme_base(self, g):
+        """Cached base data of a mesh face-me billboard: interleaved pos+uv
+        arrays per image, the vertical anchor axis and the horizontal base
+        normal. Rebuilt when the scene changes (sprites are tiny)."""
+        cache = getattr(self, "_faceme_cache", None)
+        if cache is None:
+            cache = self._faceme_cache = {}
+        key = (self.scene.version, id(self.scene.mesh))
+        cur = cache.get(id(g))
+        if cur is not None and cur[0] == key:
+            return cur[1]
+        import numpy as np
+        by_tex: dict = {}
+        n0 = None
+        for f in g.mesh.faces:
+            tex = f.attrs.get("texture")
+            if tex is None or not tex.get("path"):
+                continue
+            if n0 is None:
+                n0 = f.normal()
+            self._append_textured_face(by_tex, f, tex)
+        verts = g.mesh.vertices
+        entry = None
+        if n0 is not None and verts and by_tex:
+            xs = [v.position.x() for v in verts]
+            ys = [v.position.y() for v in verts]
+            anchor = np.array([(min(xs) + max(xs)) / 2,
+                               (min(ys) + max(ys)) / 2])
+            nh = np.array([n0.x(), n0.y()])
+            ln = float(np.hypot(nh[0], nh[1]))
+            if ln > 1e-9:
+                nh = nh / ln
+                arrays = {p: np.frombuffer(buf.tobytes(),
+                                           dtype=np.float32).reshape(-1, 5)
+                          for p, buf in by_tex.items()}
+                entry = (arrays, anchor, nh)
+        cache[id(g)] = (key, entry)
+        return entry
+
+    def _draw_faceme_mesh(self, g) -> None:
+        """Draw a mesh face-me billboard: rotate its geometry around the
+        vertical axis through its anchor so its plane faces the camera NOW.
+        Runs inside the billboard pass (textured, billboard VAO bound)."""
+        base = self._faceme_base(g)
+        if base is None:
+            return
+        arrays, anchor, nh = base
+        import numpy as np
+        eye = self.camera.eye()
+        d = np.array([eye.x() - anchor[0], eye.y() - anchor[1]])
+        ln = float(np.hypot(d[0], d[1]))
+        d = nh if ln < 1e-9 else d / ln
+        cos = float(nh[0] * d[0] + nh[1] * d[1])
+        sin = float(nh[0] * d[1] - nh[1] * d[0])
+        for path, arr in arrays.items():
+            tex = self._get_texture(path)
+            if tex is None:
+                continue
+            a = arr.copy()
+            x = a[:, 0] - anchor[0]
+            y = a[:, 1] - anchor[1]
+            a[:, 0] = anchor[0] + cos * x - sin * y
+            a[:, 1] = anchor[1] + sin * x + cos * y
+            raw = a.tobytes()
+            self._billboard_vbo.bind()
+            self._billboard_vbo.allocate(raw, len(raw))
+            self._billboard_vbo.release()
+            tex.bind(0)
+            self._gl.glDrawArrays(GL_TRIANGLES, 0, len(a))
 
     def _upload_hover_face(self, face: Face) -> int:
         """Triangulate ``face`` into the hover-faces VBO. Returns vertex count."""

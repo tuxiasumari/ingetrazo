@@ -75,6 +75,7 @@ class _Dae:
         # turned a 19 s import into a 4-minute one.
         self._src_cache: dict = {}
         self._uv_cache: dict = {}
+        self._img_alpha: dict = {}
         self.by_id: dict = {}
         for el in root.iter():
             i = el.get("id")
@@ -404,22 +405,102 @@ def _collect_direct(dae: _Dae, node_el, m: QMatrix4x4, out: list) -> None:
                 out.append(([world[i] for i in lp], color, tex))
 
 
+def _image_has_cutout(dae: _Dae, path: str) -> bool:
+    """Whether the image carries REAL transparency (some pixels see-through)
+    — the signature of a photo sprite (a person/animal/tree cutout PNG),
+    versus an opaque photo panel (a sign or mural)."""
+    cached = dae._img_alpha.get(path)
+    if cached is not None:
+        return cached
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+    img = QImage(path)
+    ok = False
+    if not img.isNull() and img.hasAlphaChannel():
+        small = img.scaled(32, 32, Qt.IgnoreAspectRatio,
+                           Qt.FastTransformation)
+        for yy in range(small.height()):
+            for xx in range(small.width()):
+                if small.pixelColor(xx, yy).alpha() < 32:
+                    ok = True
+                    break
+            if ok:
+                break
+    dae._img_alpha[path] = ok
+    return ok
+
+
+def _looks_faceme(dae: _Dae, loops) -> bool:
+    """Whether a component subtree reads as a SketchUp face-me sprite: every
+    polygon textured with the SAME image, all coplanar on ONE near-vertical
+    plane (in final Z-up coordinates), and either a cut silhouette (more
+    than 4 distinct corners) or a rectangle whose image has REAL
+    transparency (SketchUp people/animals/trees are alpha-cutout PNGs on a
+    rectangle; an opaque photo panel — a sign, a mural — stays static).
+    COLLADA drops the 'always face camera' flag, so these are the only
+    signals left to keep sprites turning toward the camera."""
+    from formats.fuse import _key, _newell
+    if not 1 <= len(loops) <= 400:
+        return False
+    path = None
+    n_ref = None
+    corners: set = set()
+    for pts, _color, tex in loops:
+        if tex is None:
+            return False
+        if path is None:
+            path = tex[0]
+        elif tex[0] != path:
+            return False
+        zpts = [dae.to_zup(p) for p in pts]
+        n = _newell(zpts)
+        ln = n.length()
+        if ln < 1e-12:
+            continue
+        n = n / ln
+        if abs(n.z()) > 0.08:
+            return False                     # not vertical
+        if n_ref is None:
+            n_ref = n
+        elif abs(QVector3D.dotProduct(n, n_ref)) < 0.99:
+            return False                     # not one plane
+        for p in zpts:
+            corners.add(_key(p))
+    if n_ref is None:
+        return False
+    return len(corners) > 4 or _image_has_cutout(dae, path)
+
+
 def _collect(dae: _Dae, node_el, xform: QMatrix4x4, out: list,
-             depth: int = 0) -> None:
+             depth: int = 0, faceme: list | None = None) -> None:
     """Walk a node tree, baking transforms; instances recurse into
-    ``library_nodes`` (SketchUp components)."""
+    ``library_nodes`` (SketchUp components). With ``faceme`` given, a child
+    component whose geometry is a face-me silhouette is pulled out into it
+    as ``(name, loops)`` instead of flattening into the parent."""
     if depth > 32:
         return                                     # cyclic instance guard
     m = xform * _node_matrix(node_el)
     _collect_direct(dae, node_el, m, out)
     for el in node_el:
         t = _tag(el)
+        target = None
+        d2 = depth
         if t == "node":
-            _collect(dae, el, m, out, depth)
+            target = el
         elif t == "instance_node":
             target = dae.ref(el.get("url"))
-            if target is not None:
-                _collect(dae, target, m, out, depth + 1)
+            d2 = depth + 1
+        if target is None:
+            continue
+        if faceme is not None:
+            sub: list = []
+            _collect(dae, target, m, sub, d2, faceme)
+            if sub and _looks_faceme(dae, sub):
+                faceme.append((el.get("name") or _node_label(target), sub))
+            else:
+                out.extend(sub)
+        else:
+            _collect(dae, target, m, out, d2)
 
 
 def _prim_count(prim) -> int:
@@ -478,10 +559,11 @@ def _node_label(node_el) -> str:
     return node_el.get("name") or node_el.get("id") or "node"
 
 
-def _bucketize(dae: _Dae, top_nodes) -> list:
+def _bucketize(dae: _Dae, top_nodes, faceme: list | None = None) -> list:
     """Split the visual scene into ``(name, loops)`` buckets along the DAE
     node hierarchy (SketchUp groups/components). Returns at most
-    ``_MAX_GROUPS`` buckets, largest assemblies split first."""
+    ``_MAX_GROUPS`` buckets, largest assemblies split first. Face-me
+    silhouettes found anywhere in the tree land in ``faceme`` instead."""
     import heapq
     from itertools import count as _count
     tie = _count()
@@ -531,7 +613,10 @@ def _bucketize(dae: _Dae, top_nodes) -> list:
         if kind == "direct":
             _collect_direct(dae, node_el, xform, loops)
         else:
-            _collect(dae, node_el, xform, loops, depth)
+            _collect(dae, node_el, xform, loops, depth, faceme)
+            if faceme is not None and loops and _looks_faceme(dae, loops):
+                faceme.append((name, loops))   # the bucket itself is a sprite
+                continue
         if loops:
             buckets.append((name, loops))
     return buckets
@@ -575,12 +660,15 @@ def load_dae(scene, path, progress=None) -> None:
         from core.mesh import Mesh
         from formats.fuse import fuse_coplanar_loops, soften_smooth_edges
         tick(0.1, "Collecting geometry…")
-        buckets = _bucketize(dae, top_nodes)
-        if not buckets:
+        faceme: list = []
+        buckets = _bucketize(dae, top_nodes, faceme)
+        if not buckets and not faceme:
             raise ValueError("No geometry found in the COLLADA file")
-        total_loops = max(sum(len(lp) for _n, lp in buckets), 1)
+        total_loops = max(sum(len(lp) for _n, lp in buckets + faceme), 1)
         done = 0
-        for name, loops in buckets:
+        for is_sprite, name, loops in (
+                [(False, n, lp) for n, lp in buckets]
+                + [(True, n, lp) for n, lp in faceme]):
             tick(0.15 + 0.8 * done / total_loops, f"Building {name}…")
             raw = []
             for loop, color, tex in loops:
@@ -592,16 +680,43 @@ def load_dae(scene, path, progress=None) -> None:
                 _add_fused(target, [item])
             soften_smooth_edges(target)
             if target.faces:
-                scene.groups.append(Group(target, name=name))
+                g = Group(target, name=name)
+                if is_sprite:
+                    g.billboard = "mesh"   # geometry turns toward the camera
+                scene.groups.append(g)
             done += len(loops)
         scene.version += 1
         tick(1.0, "Done")
         return
 
     pending: list = []
+    faceme: list = []
     for node in top_nodes:
-        _collect(dae, node, QMatrix4x4(), pending)
-    if not pending:
+        sub: list = []
+        _collect(dae, node, QMatrix4x4(), sub, faceme=faceme)
+        if sub and _looks_faceme(dae, sub):
+            faceme.append((_node_label(node), sub))   # top node IS a sprite
+        else:
+            pending.extend(sub)
+    if faceme:
+        # Face-me sprites become billboard groups even in a small import.
+        from core.group import Group
+        from core.mesh import Mesh
+        from formats.fuse import fuse_coplanar_loops, soften_smooth_edges
+        for name, loops in faceme:
+            raw = []
+            for loop, color, tex in loops:
+                zpts = [dae.to_zup(p) for p in loop]
+                raw.append((zpts, _face_attrs(zpts, color, tex)))
+            target = Mesh()
+            for item in fuse_coplanar_loops(raw):
+                _add_fused(target, [item])
+            soften_smooth_edges(target)
+            if target.faces:
+                g = Group(target, name=name)
+                g.billboard = "mesh"
+                scene.groups.append(g)
+    if not pending and not faceme:
         # No visual scene (bare geometry library): import it un-instanced.
         for geom in root.iter(f"{_NS}geometry"):
             mesh_el = geom.find(f"{_NS}mesh")
@@ -614,6 +729,10 @@ def load_dae(scene, path, progress=None) -> None:
                         pending.append(([positions[i] for i in lp],
                                         None, None))
     if not pending:
+        if faceme:
+            scene.version += 1
+            tick(1.0, "Done")
+            return
         raise ValueError("No geometry found in the COLLADA file")
 
     if len(pending) > _MAX_FUSE_LOOPS:

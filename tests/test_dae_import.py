@@ -290,3 +290,40 @@ def test_textured_import_missing_image_falls_back_to_color(tmp_path):
     tex = scene.mesh.faces[0].attrs.get("texture")
     assert tex is None                              # no file -> tint fallback
     assert scene.mesh.faces[0].attrs.get("color") is not None
+
+
+def test_faceme_sprite_imports_as_mesh_billboard(tmp_path):
+    """A component that is a single vertical plane textured with an
+    alpha-cutout image (SketchUp face-me people/animals/trees) imports as a
+    billboard group whose geometry turns toward the camera — COLLADA drops
+    the 'always face camera' flag, so the shape+alpha heuristic recovers it."""
+    p, img = _textured_quad_dae(tmp_path, image_name="sprite.png")
+    import shutil
+    shutil.copy("/home/sumaritux/ingetrazo/resources/components/"
+                "person_billboard.png", img)      # a real cutout PNG
+    # make the quad VERTICAL (xz plane) so it reads as a sprite
+    text = (tmp_path / "textured.dae").read_text()
+    text = text.replace("0 0 0  2 0 0  2 3 0  0 3 0",
+                        "0 0 0  2 0 0  2 0 3  0 0 3")
+    (tmp_path / "textured.dae").write_text(text)
+    scene = Scene()
+    load_dae(scene, tmp_path / "textured.dae")
+    assert not scene.mesh.faces                    # pulled out of the loose mesh
+    assert len(scene.groups) == 1
+    g = scene.groups[0]
+    assert getattr(g, "billboard", False) == "mesh"
+    assert any(f.attrs.get("texture") for f in g.mesh.faces)
+
+
+def test_opaque_photo_panel_stays_static(tmp_path):
+    """A rectangular panel with an OPAQUE image (a sign, a mural) must NOT
+    become a spinning billboard."""
+    p, img = _textured_quad_dae(tmp_path, image_name="mural.png")
+    text = (tmp_path / "textured.dae").read_text()
+    text = text.replace("0 0 0  2 0 0  2 3 0  0 3 0",
+                        "0 0 0  2 0 0  2 0 3  0 0 3")   # vertical too
+    (tmp_path / "textured.dae").write_text(text)
+    scene = Scene()
+    load_dae(scene, tmp_path / "textured.dae")
+    assert not scene.groups                        # brick.png has no cutout
+    assert len(scene.mesh.faces) == 1
