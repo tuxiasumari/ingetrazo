@@ -335,7 +335,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(toggle_tray)
 
         toggle_georef = self.georef_tray.toggleViewAction()
-        toggle_georef.setText(tr("Georef panel"))
+        toggle_georef.setText(tr("Terrain panel"))
         view_menu.addAction(toggle_georef)
 
         toggle_profile = self.profile_dock.toggleViewAction()

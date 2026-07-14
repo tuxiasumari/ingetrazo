@@ -149,6 +149,18 @@ class SceneDatum:
                                self.zone, self.northern)
         return lat, lon, point.z() + self.alt
 
+    def utm_to_local(self, east: float, north: float,
+                     alt: float = 0.0) -> QVector3D:
+        """UTM metres (in the datum's frozen zone — survey CSVs report these
+        directly) → local scene metres. Pure offsets, no reprojection."""
+        return QVector3D(east - self._east0, north - self._north0,
+                         alt - self.alt)
+
+    def local_to_utm(self, point: QVector3D) -> tuple[float, float, float]:
+        """Local scene metres → UTM ``(east, north, alt)`` in the frozen zone."""
+        return (point.x() + self._east0, point.y() + self._north0,
+                point.z() + self.alt)
+
     # ---- Serialisation ------------------------------------------------------
     def to_dict(self) -> dict:
         return {"lat": self.lat, "lon": self.lon, "alt": self.alt}

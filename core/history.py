@@ -609,6 +609,54 @@ class AddGeoPathCommand(Command):
         scene.version += 1
 
 
+class AddGeoPointsCommand(Command):
+    """Import a batch of survey points into ``scene.geo_points`` (Track G).
+    When the import also anchored the scene datum (first georef action on the
+    document), the datum travels with the command so undo restores the
+    previous one."""
+
+    def __init__(self, points, datum=None) -> None:
+        self._points = list(points)
+        self._datum = datum
+        self._prev_datum = None
+
+    def do(self, scene) -> None:
+        if self._datum is not None:
+            self._prev_datum = scene.georef
+            scene.georef = self._datum
+        scene.geo_points.extend(self._points)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for p in self._points:
+            if p in scene.geo_points:
+                scene.geo_points.remove(p)
+        if self._datum is not None:
+            scene.georef = self._prev_datum
+        scene.version += 1
+
+
+class DeleteGeoPointsCommand(Command):
+    """Remove survey points from ``scene.geo_points``."""
+
+    def __init__(self, points) -> None:
+        self._points = list(points)
+        self._restore: list[tuple[int, object]] = []
+
+    def do(self, scene) -> None:
+        self._restore = [(scene.geo_points.index(p), p)
+                         for p in self._points if p in scene.geo_points]
+        for p in self._points:
+            if p in scene.geo_points:
+                scene.geo_points.remove(p)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for i, p in sorted(self._restore):
+            scene.geo_points.insert(i, p)
+        scene.version += 1
+
+
 class DeleteGeoPathsCommand(Command):
     """Remove georef paths from ``scene.geo_paths``."""
 

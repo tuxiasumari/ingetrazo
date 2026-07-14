@@ -1855,6 +1855,9 @@ class Viewport(QOpenGLWidget):
         # Traced georef paths (roads / boundaries) — Track G.
         self._draw_geo_paths(painter)
 
+        # Imported survey points (GPS / total station) — Track G.
+        self._draw_geo_points(painter)
+
         # Profile→plan marker: the route point at the station hovered in the
         # profile panel (Track G).
         if self._route_marker is not None:
@@ -2085,6 +2088,30 @@ class Viewport(QOpenGLWidget):
             if z is not None:
                 return QVector3D(v.x(), v.y(), z)
         return v
+
+    def _draw_geo_points(self, painter: QPainter) -> None:
+        """Draw imported survey points (GPS / total station): a small cross
+        marker with the point's name — the surveyed skeleton the user traces
+        over. Reference-only; they carry their own elevation (no draping)."""
+        points = getattr(self.scene, "geo_points", None)
+        if not points:
+            return
+        ink = QColor(206, 66, 87)               # survey red — distinct from
+        painter.setPen(QPen(ink, 1.6))          # cyan paths / orange selection
+        font = QFont()
+        font.setPointSize(8)
+        painter.setFont(font)
+        for gp in points:
+            q = self._world_to_pixel(gp.position)
+            if q is None:
+                continue
+            x, y = q
+            painter.setPen(QPen(ink, 1.6))
+            painter.drawLine(QPointF(x - 5, y), QPointF(x + 5, y))
+            painter.drawLine(QPointF(x, y - 5), QPointF(x, y + 5))
+            if gp.name:
+                painter.setPen(QColor(120, 34, 48))
+                painter.drawText(QPointF(x + 7, y - 4), gp.name)
 
     def _draw_geo_paths(self, painter: QPainter) -> None:
         """Draw committed georef paths (roads / boundaries): a coloured polyline
@@ -3375,6 +3402,12 @@ class Viewport(QOpenGLWidget):
         near = self._nearby_group_edges(px, py) if px is not None else []
         if px is not None:
             near += self._billboard_snap_edges()
+        # Survey points snap as degenerate pseudo-edges: the endpoint snap
+        # lands EXACTLY on the surveyed coordinate (the municipal flow's whole
+        # point); direction-based inferences skip zero-length edges safely.
+        for gp in getattr(self.scene, "geo_points", None) or []:
+            near.append(_SnapEdge(QVector3D(gp.position),
+                                  QVector3D(gp.position)))
         if not lines and not near:
             return self.scene
         from types import SimpleNamespace

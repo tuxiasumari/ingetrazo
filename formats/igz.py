@@ -139,6 +139,9 @@ def save_scene(scene, path: Path) -> None:
     paths = getattr(scene, "geo_paths", None)
     if paths:
         payload["geo_paths"] = [p.to_dict() for p in paths]
+    points = getattr(scene, "geo_points", None)
+    if points:
+        payload["geo_points"] = [p.to_dict() for p in points]
     guides = getattr(scene, "guides", None)
     if guides:
         payload["guides"] = [g.to_dict() for g in guides]
@@ -165,6 +168,7 @@ def load_into(scene, path: Path) -> None:
     scene.selection.clear()
     scene.groups.clear()
     scene.geo_paths.clear()
+    scene.geo_points.clear()
     scene.georef = None
 
     _load_mesh(scene.mesh, payload)
@@ -213,6 +217,10 @@ def load_into(scene, path: Path) -> None:
 
     for raw in payload.get("geo_paths", []):
         scene.geo_paths.append(GeoPath.from_dict(raw))
+
+    from georef.points import GeoPoint
+    for raw in payload.get("geo_points", []):
+        scene.geo_points.append(GeoPoint.from_dict(raw))
 
     from core.guide import Guide
     scene.guides.clear()

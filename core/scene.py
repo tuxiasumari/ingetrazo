@@ -33,6 +33,9 @@ class Scene:
     # Georef traced paths (roads / boundaries / alignments) — first-class georef
     # entities, kept out of the topology mesh entirely (Track G).
     geo_paths: list = field(default_factory=list)
+    # Imported survey points (GPS / total station, UTM CSV) — reference markers
+    # the trace snaps to; never part of the mesh (Track G, municipal flow).
+    geo_points: list = field(default_factory=list)
     # Construction guides (Tape Measure): infinite dashed lines / points used to
     # align real drawing. Scaffolding, never part of the mesh.
     guides: list = field(default_factory=list)
@@ -175,11 +178,12 @@ class Scene:
         if (self.mesh.edges or self.mesh.faces or self.selection
                 or self.groups or self.dimensions or self.georef
                 or self.tile_layer or self.geo_paths or self.terrain
-                or self.guides):
+                or self.guides or self.geo_points):
             self.mesh.clear()
             self.groups.clear()
             self.dimensions.clear()
             self.geo_paths.clear()
+            self.geo_points.clear()
             self.guides.clear()
             self.selection.clear()
             from core.layers import DEFAULT_LAYER, Layer
