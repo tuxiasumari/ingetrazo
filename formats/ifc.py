@@ -20,7 +20,7 @@ import datetime
 import uuid
 from pathlib import Path
 
-from core.bim import collect_objects, face_set_volume
+from core.bim import class_quantities, collect_objects, face_set_volume
 
 _GUID_CHARS = ("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                "abcdefghijklmnopqrstuvwxyz_$")
@@ -164,26 +164,35 @@ def save_ifc(scene, path, project_name: str = "IngeTrazo project") -> int:
         from core.bim import IFC_CLASSES
         cls = obj["class"] if obj["class"] in IFC_CLASSES \
             else "IfcBuildingElementProxy"
+        qset_name, qentries, _metrado = class_quantities(obj["class"], faces)
         total = _ATTR_COUNT.get(cls, _DEFAULT_ATTRS)
         attrs = [_s(ifc_guid()), "$", _s(obj["name"] or cls), "$", "$",
                  f"#{placement}", f"#{pds}", "'IngeTrazo'"]
+        if cls in ("IfcDoor", "IfcWindow"):
+            # Attributes 9/10 are OverallHeight/OverallWidth — viewers and
+            # schedules read the leaf dimensions from here.
+            dims = {name: val for kind, name, val in qentries
+                    if kind == "length"}
+            attrs.append(_f(dims["Height"]) if "Height" in dims else "$")
+            attrs.append(_f(dims["Width"]) if "Width" in dims else "$")
         attrs += ["$"] * (total - len(attrs))
         elem = w.add(cls.upper(), *attrs)
         element_ids.append(elem)
 
-        # BaseQuantities: the takeoff numbers, straight in the file.
-        qa = w.add("IFCQUANTITYAREA", "'GrossArea'", "$", "$",
-                   _f(obj["area"]), "$")
-        quantities = [f"#{qa}"]
-        if obj["volume"] is not None:
-            qv = w.add("IFCQUANTITYVOLUME", "'GrossVolume'", "$", "$",
-                       _f(obj["volume"]), "$")
-            quantities.append(f"#{qv}")
-        eq = w.add("IFCELEMENTQUANTITY", _s(ifc_guid()), "$",
-                   "'BaseQuantities'", "$", "$",
-                   "(" + ",".join(quantities) + ")")
-        w.add("IFCRELDEFINESBYPROPERTIES", _s(ifc_guid()), "$", "$", "$",
-              f"(#{elem})", f"#{eq}")
+        # Per-class BaseQuantities (Qto_* naming): the takeoff numbers in
+        # the budget's own measures, straight in the file.
+        _Q_ENTITY = {"area": "IFCQUANTITYAREA", "volume": "IFCQUANTITYVOLUME",
+                     "length": "IFCQUANTITYLENGTH"}
+        quantities = [
+            f"#{w.add(_Q_ENTITY[kind], _s(name), '$', '$', _f(val), '$')}"
+            for kind, name, val in qentries
+        ]
+        if quantities:
+            eq = w.add("IFCELEMENTQUANTITY", _s(ifc_guid()), "$",
+                       _s(qset_name), "$", "$",
+                       "(" + ",".join(quantities) + ")")
+            w.add("IFCRELDEFINESBYPROPERTIES", _s(ifc_guid()), "$", "$", "$",
+                  f"(#{elem})", f"#{eq}")
 
     if not element_ids:
         raise ValueError("No tagged BIM objects to export")

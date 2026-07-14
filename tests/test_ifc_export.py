@@ -107,6 +107,38 @@ def test_quirky_class_padding_and_unknown_class(tmp_path):
     assert "IFCBUILDINGELEMENTPROXY(" in text       # unknown class falls back
 
 
+def test_wall_emits_standard_qto_set_with_lengths(tmp_path):
+    scene = _tagged_wall_scene()
+    p = tmp_path / "wall.ifc"
+    save_ifc(scene, p)
+    text = p.read_text()
+    assert "'Qto_WallBaseQuantities'" in text
+    q = {m.group(1): float(m.group(2)) for m in re.finditer(
+        r"IFCQUANTITYLENGTH\('(\w+)',\$,\$,([\d.]+),", text)}
+    assert abs(q["Height"] - 2.6) < 1e-4
+    assert abs(q["Length"] - 4.0) < 1e-4
+    assert abs(q["Width"] - 0.25) < 1e-4
+    m = re.search(r"IFCQUANTITYAREA\('NetSideArea',\$,\$,([\d.]+),", text)
+    assert m and abs(float(m.group(1)) - 10.4) < 1e-4
+    # the misleading whole-shell area is NOT offered as a takeoff quantity
+    assert "IFCQUANTITYAREA('GrossArea'" not in text
+
+
+def test_door_carries_overall_height_and_width(tmp_path):
+    scene = Scene()
+    f = scene.mesh.add_face([V(0, 0, 0), V(0.9, 0, 0),
+                             V(0.9, 0, 2.1), V(0, 0, 2.1)])
+    tag_faces([f], "IfcDoor", "P-1", 1)
+    p = tmp_path / "door.ifc"
+    save_ifc(scene, p)
+    text = p.read_text()
+    door = re.search(r"IFCDOOR\((.*)\);", text).group(1)
+    parts = door.split(",")
+    assert abs(float(parts[8]) - 2.1) < 1e-4        # OverallHeight
+    assert abs(float(parts[9]) - 0.9) < 1e-4        # OverallWidth
+    assert "'Qto_DoorBaseQuantities'" in text
+
+
 def test_nothing_tagged_raises(tmp_path):
     scene = Scene()
     scene.mesh.add_face([V(0, 0), V(1, 0), V(1, 1), V(0, 1)])

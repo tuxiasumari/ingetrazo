@@ -255,8 +255,38 @@ Tras el fix de raíz se auditó el push/pull contra SketchUp (el usuario es ex-u
 
 - ⑧ **Regla de crease + dedup de caras (2026-06-10).** Auditando "¿qué falta para roca sólida?" se encontró y arregló un **crash real del flujo de planta** (levantar la 2ª de dos habitaciones que comparten muro → `IndexError`: el push reconstruía el muro compartido como duplicado idéntico y el merge de dos ciclos idénticos no tiene frontera que trazar). Fix triple: `dissolve_coplanar_region` dedupea ciclos idénticos en vez de crashear; **regla de crease** (una arista que carga una cara no-coplanar es estructural — nunca se fusiona a través de ella) en el merge fase 3 **y** en la unión del rebuild (`keep_keys`) → dos techos sobre un muro divisorio quedan **dos caras con ridge visible**, como SketchUp, no una losa flotando sobre el muro; `mesh.dedupe_faces()` como paso propio de la fase 0 del stitch. Test del flujo completo en `test_two_room_plan_raises_cleanly`.
 
-### 🎯 PRÓXIMA SESIÓN — PENDIENTE (actualizado 2026-07-14)
+### 🎯 PRÓXIMA SESIÓN — BIM + IFC → puente con IngePresupuestos (definido 2026-07-14)
 
+> **Decisión de rumbo 2026-07-14 (conversación en la sesión de IngePresupuestos; boceto a mano de Marco en `~/Descargas/WhatsApp Image 2026-07-14 at 4.19.41 PM.jpeg`).** Se validó la **arquitectura de información de la integración** con el caso real municipal de Marco (alcalde pide proyecto/ficha en zona rural → levantamiento sencillo con GPS/estación/dron por él mismo → antes: Google Earth/QGIS + Agisoft + CAD + SketchUp + S10/PowerCost + Project/Excel; meta: todo en IngeTrazo+IngePresupuestos):
+>
+> ```
+> INGETRAZO                              INGEPRESUPUESTOS
+>   1. TERRENO  (georef + topografía)      4. Presupuesto (ACU + metrados, importa el .ifc)
+>   2. TRAZO    (dibujo)                   5. Cronogramas
+>   3. BIM      (tagging → metrados → IFC) 6. Control de Obra (ejecución → liquidación)
+>                          └────────── .ifc ──────────┘
+> ```
+>
+> - **La pestaña «Georref» del panel se RENOMBRA a «Terreno»** (lenguaje del oficio, coherente con "trazar como a mano"). Track G es su cimiento; falta como entradas del flujo municipal: **CSV de puntos GPS/estación (P,N,E,Z,desc en UTM)** y malla OBJ de **WebODM** como referencia georef (G6). WebODM/QGIS quedan EXTERNOS (IngeTrazo importa resultados, no procesa fotogrametría ni es un GIS).
+> - **Orden de construcción: BIM→IFC ANTES que completar Terreno** — es lo que cierra el ciclo y genera valor (IngePresupuestos ya importa IFC); el terreno puede seguir preparándose fuera un tiempo más.
+>
+> **PLAN PRÓXIMA SESIÓN — implementar/cerrar BIM con IFC** (la base YA existe: `core/bim.py` con 15 clases IFC + cantidades en vivo + metrado CSV, y `formats/ifc.py` export IFC4 STEP a mano — era el candidato v0.2 #1):
+> 1. **Validar el `.ifc` contra visores reales** (BlenderBIM / IfcOpenShell / algún visor online): esqueleto espacial, geometría BRep, BaseQuantities legibles. Hoy los tests son solo estructurales.
+> 2. **Validar el puente completo**: exportar un modelo taggeado desde IngeTrazo → importarlo con el importador IFC de IngePresupuestos → revisar qué llega (partidas/cantidades) y qué se pierde.
+> 3. **Afinar cantidades por clase IFC** para que el metrado le sirva al presupuesto (muro: área neta + volumen; losa: área + volumen; columna/viga: volumen + longitud; puerta/ventana: unidades + dimensiones).
+> 4. Lo que destape el punto 2 en el lado IngePresupuestos (mapear tags/cantidades → sugerencia de partidas con el RAG de «Sugerir partidas») se anota y se implementa en la sesión de aquel repo.
+>
+> Memoria: `[[project_integracion_ingetrazo_flujo]]` (en la memoria del proyecto IngePresupuestos).
+
+> **Sesión 2026-07-14 (tarde) — BIM→IFC VALIDADO + puente IngePresupuestos FUNCIONANDO (puntos 1-3 del plan "PRÓXIMA SESIÓN" cumplidos).**
+> - **ifcopenshell 0.8.5 SÍ tiene wheel para Python 3.14** (el riesgo anotado no se materializó). Instalado en el venv como herramienta de dev — NO va a `requirements.txt`, el export sigue sin deps.
+> - **El `.ifc` a mano pasa TODO:** `ifcopenshell.validate` (schema + reglas EXPRESS) = cero issues; esqueleto espacial correcto; contención en Storey; `util.element.get_psets(qtos_only)` lee las cantidades; `ifcopenshell.geom.create_shape` tesela los 4 tipos de geometría (Brep cerrado y SurfaceModel) con coordenadas mundo exactas. Permanente en `tests/test_ifc_validation.py` (`importorskip` — se salta donde no está instalado).
+> - **Cantidades por clase IFC (`core/bim.py::class_quantities`)** — el fix gordo: antes se exportaba UNA `GrossArea` = área de TODA la cáscara del sólido (muro 4×2.6 reportaba 24 m² en vez de 10.4). Ahora cada clase emite su qset estándar `Qto_*BaseQuantities` con sus medidas honestas desde la geometría freeform: muro = NetSideArea (cara mayor, huecos descontados) + Height/Length/Width + GrossVolume; losa = NetArea/GrossArea + espesor (vol/área) + Perimeter; columna = Length + CrossSectionArea + volumen; viga ídem por su eje largo; pilote/member/baranda = Length (**nuevo `IfcQuantityLength`** — antes los elementos por metro caían al fallback de área); puerta/ventana = Width/Height en el plano de la cara (correcto en muros rotados, no bbox) + **OverallHeight/OverallWidth en la entidad** (atributos 9/10); techo/escalera/rampa = área de caras hacia arriba; covering = NetArea. Volumen solo si el set es hermético (sin cambio). `METRADO_UNIT` = la unidad de presupuesto por clase (m2/m3/m/und, espejo del mapa de IngePresupuestos).
+> - **CSV de metrado actualizado:** `class,name,metrado,unit,area_m2,volume_m3` — la columna `metrado` es la medida de presupuesto, area/volume quedan como números crudos.
+> - **Panel BIM:** columna "Área m²" → **"Metrado"** (muestra `10.40 m²`/`0.27 m³`/`8 m`/`1 und` según clase — el mismo número que viaja al IFC/CSV).
+> - **Puente completo VALIDADO** (`tests/test_ifc_bridge.py`, carga el `parse_ifc` real del repo hermano por ruta, skip si no está): casita de 10 elementos → partidas con metrados EXACTOS (muros 20.8 m², losa 12 m², columnas 0.375 m³, zapata 0.864 m³, pilote 8 m, puerta/ventana und). Nombre de proyecto y ubicación llegan.
+> - **Hallazgos para la sesión de IngePresupuestos** (punto 4 del plan): (1) su `IFC_MAP` no tiene `IFCRAILING` ni `IFCCOVERING` → esos elementos se pierden EN SILENCIO (la baranda del test no llega); (2) el importador toma `max()` de las áreas → si un elemento trae GrossSideArea Y NetSideArea gana la bruta y los vanos no se descuentan; mejor: preferir `Net*` sobre `Gross*`; (3) su set `QSET_NAMES` está definido pero nunca se usa (lee todo `IFCELEMENTQUANTITY` sin filtrar por nombre — inofensivo).
+>
 > **Sesión 2026-07-14 — INSTANCIAS COMPARTIDAS (Components v1, el ítem v0.2 para archivos de 80 MB). 1585 tests verdes.** Un componente de SketchUp instanciado ≥2 veces importa como **UN prototipo + N transformaciones**:
 > - **Modelo:** `Group.xform` (QMatrix4x4 local→mundo, `None` = grupo clásico); las instancias **comparten el mismo objeto `Mesh`** (proto en coordenadas locales). `Group.materialize()` = "hacer única" (copia profunda transformada vía add_face/add_edge — ⚠️ `capture_state` NO sirve para copiar: preserva identidad de objetos y aliasa el proto; el test lo cazó). `core/group.py::world_mesh(g)` da la malla en mundo (con remapeo del `uvw` afín: g′=L⁻ᵀg, c′=c−g′·t).
 > - **Import (`dae.py`):** `_Dae.inst_counts` (Counter de instance_node) + extracción en `_collect` a CUALQUIER profundidad cuando `polys ≥ _INST_MIN_POLYS(60)` y `polys×(copias−1) ≥ _INST_MIN_SAVED(400)` (el piso evita 900 grupos de hojas de 1 cara; las hojas se aplanan en su padre — y si el ÁRBOL entero es componente repetido, en su proto una vez). Proto se fusiona UNA vez en local; xform conjugada a Z-up (`zup_matrix`: xf = Z·M·Z⁻¹). Componente con sprite face-me adentro → fallback por copia (el sprite se extrae en su lugar del mundo).

@@ -1007,7 +1007,7 @@ class BimPanel(QWidget):
         self.tree = QTreeWidget()
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels([tr("Class"), tr("Name"),
-                                   tr("Area m²"), tr("Vol m³")])
+                                   tr("Takeoff"), tr("Vol m³")])
         self.tree.setRootIsDecorated(False)
         self.tree.setColumnWidth(0, 82)
         self.tree.setColumnWidth(1, 90)
@@ -1092,13 +1092,28 @@ class BimPanel(QWidget):
     def refresh(self) -> None:
         from PySide6.QtWidgets import QTreeWidgetItem
         from core.bim import collect_objects
+        from core.bim import class_quantities
         self._objects = collect_objects(self._scene())
         self.tree.clear()
         for obj in self._objects:
+            faces = obj.get("faces")
+            if faces is None:
+                faces = list(obj["group"].mesh.faces)
+            # The takeoff column shows the class's budget measure (wall face
+            # m², column m³, pile m, door und) — the number the IFC/CSV
+            # export carries to IngePresupuestos, not the shell area.
+            _, _, (metrado, unit) = class_quantities(obj["class"], faces)
+            pretty = {"m2": "m²", "m3": "m³"}.get(unit, unit)
+            if metrado is None:
+                met = "—"
+            elif unit == "und":
+                met = f"{metrado:.0f} {pretty}"
+            else:
+                met = f"{metrado:.2f} {pretty}"
             vol = "—" if obj["volume"] is None else f"{obj['volume']:.2f}"
             item = QTreeWidgetItem([
                 obj["class"].removeprefix("Ifc"),
-                obj["name"], f"{obj['area']:.2f}", vol])
+                obj["name"], met, vol])
             if obj["volume"] is None:
                 item.setToolTip(3, tr(
                     "Not watertight on its own — no volume"))
