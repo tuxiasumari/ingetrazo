@@ -198,6 +198,7 @@ class BaseMapPanel(QWidget):
         self._attribution.setStyleSheet("color:#9aa3b2; font-size:10px; margin-top:4px;")
         grid.addWidget(self._attribution, 9, 0, 1, 2)
 
+        self._restore_saved_source()
         self._sync_from_scene()
 
     # ---- Source -------------------------------------------------------------
@@ -210,11 +211,46 @@ class BaseMapPanel(QWidget):
             return custom_source(url, max_zoom=self._zoom.maximum())
         return PRESETS[sid]
 
+    def _restore_saved_source(self) -> None:
+        """Bring back the tile source chosen in past sessions (QSettings).
+
+        A pasted custom XYZ URL is hand-crafted (often hunted down once and
+        hard to find again), so losing it on every restart was real pain —
+        both the URL and the selected source persist as app preferences."""
+        from PySide6.QtCore import QSettings, QSignalBlocker
+        settings = QSettings()
+        url = settings.value("basemap/custom_url", "", type=str)
+        sid = settings.value("basemap/source", "", type=str)
+        blockers = [QSignalBlocker(self._source),
+                    QSignalBlocker(self._custom_url)]
+        if url:
+            self._custom_url.setText(url)
+        if sid:
+            idx = self._source.findData(sid)
+            if idx >= 0:
+                self._source.setCurrentIndex(idx)
+        del blockers
+        self._custom_url.setVisible(self._source.currentData() == self._CUSTOM)
+        src = self._current_source()
+        if src is not None:
+            self._attribution.setText(src.attribution)
+
+    def _save_source_pref(self) -> None:
+        from PySide6.QtCore import QSettings
+        settings = QSettings()
+        settings.setValue("basemap/source", self._source.currentData())
+        url = self._custom_url.text().strip()
+        if url:
+            # Never clear the stored URL on an empty field: switching to a
+            # preset (or clearing to retype) must not forget the custom one.
+            settings.setValue("basemap/custom_url", url)
+
     def _on_source_changed(self) -> None:
         self._custom_url.setVisible(self._source.currentData() == self._CUSTOM)
         self._apply_source()
 
     def _apply_source(self) -> None:
+        self._save_source_pref()
         src = self._current_source()
         if src is None:
             return
