@@ -514,6 +514,10 @@ class MainWindow(QMainWindow):
         export_obj_action.triggered.connect(self._on_export_obj)
         actions.append(export_obj_action)
 
+        export_img_action = QAction(tr("Export Image…"), self)
+        export_img_action.triggered.connect(self._on_export_image)
+        actions.append(export_img_action)
+
         actions.append(self._separator())
 
         quit_action = QAction(tr("Quit"), self)
@@ -1335,6 +1339,35 @@ class MainWindow(QMainWindow):
 
     def _on_export_obj(self) -> None:
         self._export("OBJ", "obj", tr("Wavefront OBJ (*.obj)"), obj_format.save_obj)
+
+    def _on_export_image(self) -> None:
+        """Hi-res 2D export of the current view (SketchUp's 'Export 2D
+        Graphic'): pick a file and a pixel width; height follows the
+        viewport's aspect so the image matches exactly what you framed."""
+        from PySide6.QtWidgets import QInputDialog
+        base = (self._current_path.stem if self._current_path is not None
+                else "untitled")
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, tr("Export Image"), f"{base}.png",
+            tr("PNG image (*.png);;JPEG image (*.jpg)"))
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+            path = path.with_suffix(".png")
+        width, ok = QInputDialog.getInt(
+            self, tr("Export Image"), tr("Width in pixels:"),
+            3840, 640, 16384, 320)
+        if not ok:
+            return
+        image = self.viewport.render_image(width)
+        if image is None or image.isNull() or not image.save(str(path)):
+            QMessageBox.critical(self, tr("Export Image failed"),
+                                 tr("Could not render or save the image."))
+            return
+        self.statusBar().showMessage(
+            tr("Exported image {w}×{h} → {name}",
+               w=image.width(), h=image.height(), name=path.name), 4000)
 
     def _export(self, label: str, suffix: str, file_filter, writer) -> None:
         base = (self._current_path.stem if self._current_path is not None

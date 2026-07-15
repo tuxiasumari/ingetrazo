@@ -375,6 +375,10 @@ class Viewport(QOpenGLWidget):
         # breaks hidden-line removal. Rendering into our own FBO and blitting
         # color out guarantees a real depth buffer is present.
         self._scene_fbo: Optional[QOpenGLFramebufferObject] = None
+        # When set, paintGL renders at this framebuffer size into the scene
+        # FBO and stops there (no blit, no widget overlay) — the hi-res image
+        # export path (render_image) reads the FBO back instead.
+        self._export_size: Optional[tuple[int, int]] = None
         self._fbo_size = (0, 0)
 
         # Camera navigation state (middle button)
@@ -501,6 +505,53 @@ class Viewport(QOpenGLWidget):
             self._scene_fbo = QOpenGLFramebufferObject(size[0], size[1], fmt)
         self._fbo_size = size
 
+    def render_image(self, width_px: int) -> Optional["QImage"]:
+        """Render the current view at ``width_px`` wide (height follows the
+        viewport's aspect) and return it as a ``QImage`` — the hi-res 2D
+        export. Reuses the exact ``paintGL`` pipeline against a temporary
+        FBO, then paints the presentation overlays (dimensions, geo paths,
+        survey points, guides) on top with a scaled QPainter; interactive
+        artifacts (snap marker, hover, rubber band) are naturally absent."""
+        if self._gl is None or self._program is None:
+            return None
+        lw = max(self.width(), 1)
+        lh = max(self.height(), 1)
+        width_px = max(int(width_px), 64)
+        height_px = max(int(round(width_px * lh / lw)), 64)
+
+        prev_fbo = self._scene_fbo
+        prev_size = self._fbo_size
+        self.makeCurrent()
+        try:
+            self._export_size = (width_px, height_px)
+            try:
+                self.paintGL()
+                image = self._scene_fbo.toImage()   # resolves MSAA itself
+            finally:
+                self._export_size = None
+                # Drop the big export FBO (destroyed here, context current)
+                # and put the on-screen one back.
+                self._scene_fbo = prev_fbo
+                self._fbo_size = prev_size
+        finally:
+            self.doneCurrent()
+
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        # Overlay drawing works in logical widget pixels (_world_to_pixel);
+        # the scale maps it onto the hi-res image, thickening lines and text
+        # proportionally.
+        painter.scale(width_px / lw, height_px / lh)
+        self._draw_guides(painter)
+        self._draw_geo_surfaces(painter)
+        self._draw_geo_paths(painter)
+        self._draw_geo_points(painter)
+        self._draw_dimensions(painter)
+        painter.end()
+        self.update()                               # repaint the widget
+        return image
+
     def paintGL(self) -> None:
         if self._gl is None or self._program is None:
             return
@@ -511,7 +562,7 @@ class Viewport(QOpenGLWidget):
         # in framebuffer pixels — using logical (self.width/height) here would
         # blit into a fraction of the widget on HiDPI displays and shift the
         # rendered scene away from the mouse cursor.
-        w, h = self._fb_size()
+        w, h = self._export_size or self._fb_size()
         self._ensure_scene_fbo(w, h)
         default_fbo = self.defaultFramebufferObject()
         self._scene_fbo.bind()
@@ -700,6 +751,12 @@ class Viewport(QOpenGLWidget):
             self._gl.glEnable(GL_DEPTH_TEST)
 
         self._program.release()
+
+        if self._export_size is not None:
+            # Hi-res export: the scene stays in the FBO for render_image to
+            # read back; the widget blit and its QPainter overlay don't apply.
+            self._scene_fbo.release()
+            return
 
         # Blit colour from our scene FBO to the widget's default framebuffer.
         # We can't use QOpenGLFramebufferObject.blitFramebuffer(None, src) here
