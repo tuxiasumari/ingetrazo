@@ -4,6 +4,28 @@ All notable changes to IngeTrazo are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com); versions
 follow [SemVer](https://semver.org).
 
+## [0.2.1] — 2026-07-16
+
+Open SketchUp files directly: File ▸ Import ▸ SketchUp (.skp)…
+
+### Added
+- **Direct `.skp` import** through the external `skp2dae` converter — run as
+  a separate process (the proprietary Trimble DLL never enters the GPL
+  tree). The `.dae` and its texture folder land next to the `.skp`, then the
+  existing COLLADA importer takes over (groups, components, textures,
+  face-me sprites). On Linux the converter runs via Wine.
+- **One-click converter install**: if `skp2dae` is missing, the import
+  dialog offers to install it automatically — the converter executable is
+  downloaded from the IngeTrazo release and the SketchUp runtime DLLs from
+  the Blender "SketchUp Importer" add-on's public release, into
+  `~/.local/share/skp2dae/`. No terminal required.
+
+### Fixed
+- `.skp` files stored under accented paths (`Imágenes`, `ñ`…) failed with a
+  UTF-8 decode error — Wine re-encodes command-line arguments to the
+  Windows ANSI codepage. The conversion now routes through an ASCII
+  temporary path and tolerates any output encoding.
+
 ## [0.2.0] — 2026-07-15
 
 The BIM release: the IFC bridge to IngePresupuestos is validated end to end,
