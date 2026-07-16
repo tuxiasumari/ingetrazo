@@ -1090,7 +1090,6 @@ class MainWindow(QMainWindow):
     def _on_insert_person_2d(self, image: str = "person_billboard.png",
                              height: float = 1.75,
                              name: str | None = None) -> None:
-        from core.history import InsertGroupCommand
         self.viewport.end_group_edit()
         group = self._make_billboard_person(image, height, name)
         if group is None:
@@ -1098,11 +1097,7 @@ class MainWindow(QMainWindow):
                                 tr("Component file missing: {p}",
                                    p="person_billboard.png"))
             return
-        self.viewport.history.execute(InsertGroupCommand(group))
-        self._activate_tool("move")
-        self.viewport.flash_status(
-            tr("Component inserted at the origin — Move (M) places it"), 4000)
-        self.viewport.update()
+        self._start_place(group)
 
     def _on_insert_faceme_image(self) -> None:
         """Insert the user's own transparent PNG as a face-me billboard —
@@ -1110,7 +1105,6 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QImage
         from PySide6.QtWidgets import QInputDialog
         from core.group import make_billboard_group
-        from core.history import InsertGroupCommand
         self.viewport.end_group_edit()
         path_str, _ = QFileDialog.getOpenFileName(
             self, tr("Face-me image"), "",
@@ -1136,16 +1130,11 @@ class MainWindow(QMainWindow):
         group = make_billboard_group(
             path_str, height, Path(path_str).stem,
             img.width() / img.height())
-        self.viewport.history.execute(InsertGroupCommand(group))
-        self._activate_tool("move")
-        self.viewport.flash_status(
-            tr("Component inserted at the origin — Move (M) places it"), 4000)
-        self.viewport.update()
+        self._start_place(group)
 
     def _on_insert_component(self, key: str) -> None:
         """Insert a bundled starter component as a Group at the origin,
         selected and ready to Move into place."""
-        from core.history import InsertGroupCommand
         from core.group import Group
         from core.scene import Scene as _Scene
         from formats import obj as _obj
@@ -1159,10 +1148,21 @@ class MainWindow(QMainWindow):
         temp = _Scene()
         _obj.load_obj(temp, path)
         group = Group(temp.mesh, name=tr(key.capitalize()))
-        self.viewport.history.execute(InsertGroupCommand(group))
-        self._activate_tool("move")
+        self._start_place(group)
+
+    def _start_place(self, group) -> None:
+        """Hand a freshly built component to the placement tool: it follows
+        the cursor (settling on the ground plane by default) and a click
+        drops it — instead of dumping it at the origin."""
+        from tools.place_group import PlaceGroupTool
+        self.viewport.set_active_tool(PlaceGroupTool(group))
+        for action in self._tool_actions.values():
+            action.setChecked(False)
+        self._tool_label.setText(
+            tr("Tool: {name}", name=tr("Place component")))
+        self._refresh_vcb()
         self.viewport.flash_status(
-            tr("Component inserted at the origin — Move (M) places it"), 4000)
+            tr("Click to place the component (Esc cancels)"), 4000)
         self.viewport.update()
 
     def _on_get_models(self) -> None:
