@@ -472,9 +472,31 @@ class MainWindow(QMainWindow):
 
         actions.append(self._separator())
 
-        import_obj_action = QAction(tr("Import OBJ…"), self)
-        import_obj_action.triggered.connect(self._on_import_obj)
-        actions.append(import_obj_action)
+        # One home for everything that comes in, one for everything that
+        # goes out — the flat list had import/export items scattered.
+        import_menu = QMenu(tr("Import"), self)
+        for label, handler in (
+            (tr("SketchUp / COLLADA (.dae)…"), self._on_import_dae),
+            (tr("Wavefront OBJ (.obj)…"), self._on_import_obj),
+            (tr("Georeference (KML / GeoJSON)…"), self._on_import_georef),
+            (tr("Survey points CSV (UTM)…"), self._on_import_survey_points),
+        ):
+            act = QAction(label, self)
+            act.triggered.connect(handler)
+            import_menu.addAction(act)
+        actions.append(import_menu)
+
+        export_menu = QMenu(tr("Export"), self)
+        for label, handler in (
+            (tr("IFC (BIM)…"), self._on_export_ifc),
+            (tr("STL (3D printing)…"), self._on_export_stl),
+            (tr("Wavefront OBJ (.obj)…"), self._on_export_obj),
+            (tr("Image (PNG / JPG)…"), self._on_export_image),
+        ):
+            act = QAction(label, self)
+            act.triggered.connect(handler)
+            export_menu.addAction(act)
+        actions.append(export_menu)
 
         components_menu = QMenu(tr("Insert component"), self)
         sumari_act = QAction(tr("Sumari (author, 1.65 m)"), self)
@@ -500,30 +522,6 @@ class MainWindow(QMainWindow):
                 lambda _c, k=key: self._on_insert_component(k))
             components_menu.addAction(act)
         actions.append(components_menu)
-
-        import_dae_action = QAction(tr("Import DAE…"), self)
-        import_dae_action.triggered.connect(self._on_import_dae)
-        actions.append(import_dae_action)
-
-        import_geo_action = QAction(tr("Import georef (KML / GeoJSON)…"), self)
-        import_geo_action.triggered.connect(self._on_import_georef)
-        actions.append(import_geo_action)
-
-        export_ifc_action = QAction(tr("Export IFC…"), self)
-        export_ifc_action.triggered.connect(self._on_export_ifc)
-        actions.append(export_ifc_action)
-
-        export_stl_action = QAction(tr("Export STL…"), self)
-        export_stl_action.triggered.connect(self._on_export_stl)
-        actions.append(export_stl_action)
-
-        export_obj_action = QAction(tr("Export OBJ…"), self)
-        export_obj_action.triggered.connect(self._on_export_obj)
-        actions.append(export_obj_action)
-
-        export_img_action = QAction(tr("Export Image…"), self)
-        export_img_action.triggered.connect(self._on_export_image)
-        actions.append(export_img_action)
 
         actions.append(self._separator())
 
@@ -1177,7 +1175,8 @@ class MainWindow(QMainWindow):
             "<b>3D Warehouse</b> — "
             "<a href='https://3dwarehouse.sketchup.com'>"
             "3dwarehouse.sketchup.com</a><br>"
-            + tr("Download as COLLADA (.dae) and use File → Import DAE.")
+            + tr("Download as COLLADA (.dae) and use "
+                 "File → Import → SketchUp / COLLADA.")
             + "<br><br>"
             "<b>Poly Haven</b> — <a href='https://polyhaven.com'>"
             "polyhaven.com</a> " + tr("(CC0: models OBJ and PBR textures)")
@@ -1346,6 +1345,12 @@ class MainWindow(QMainWindow):
 
     def _on_export_obj(self) -> None:
         self._export("OBJ", "obj", tr("Wavefront OBJ (*.obj)"), obj_format.save_obj)
+
+    def _on_import_survey_points(self) -> None:
+        """File-menu twin of the Terrain panel's survey-CSV import, so every
+        way into the model lives under File ▸ Import."""
+        self.georef_tray.survey._on_import()
+        self.georef_tray.raise_()
 
     def _on_export_image(self) -> None:
         """Hi-res 2D export of the current view (SketchUp's 'Export 2D
