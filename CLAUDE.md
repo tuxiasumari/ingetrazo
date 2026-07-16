@@ -278,6 +278,14 @@ Tras el fix de raíz se auditó el push/pull contra SketchUp (el usuario es ex-u
 >
 > Memoria: `[[project_integracion_ingetrazo_flujo]]` (en la memoria del proyecto IngePresupuestos).
 
+> **Sesión 2026-07-15 (noche) — VERSIÓN WINDOWS + release v0.2.0 PUBLICADO.** Tag `v0.2.0` + release en GitHub (notas con 3 capturas) **con binarios Windows adjuntos**: `ingetrazo-setup-v0.2.0.exe` (Inno Setup, wizard en español, asocia `.igz`) y `ingetrazo-windows.zip` (portable). Pipeline porteado de IngePresupuestos y recortado al stack mínimo:
+> - **`ingetrazo.spec`** (PyInstaller onedir; VERSIONADO — el `.gitignore` tenía `*.spec` y se agregó excepción): datas espejan el layout del repo (shaders/textures+library/components+thumbs/icons/i18n) porque TODOS los lookups de recursos son raíz-relativos (`Path(__file__).parents[1]`) y en el bundle caen en `_internal/`. Excludes: ifcopenshell/pytest (dev-only). **Validado construyendo y LANZANDO el binario congelado en Linux** (mismo spec multi-plataforma): menús/íconos/texturas/GL todo OK.
+> - **GL en Windows**: NO se fuerza nada — Qt 6 elige desktop OpenGL y cae al rasterizador software (`opengl32sw.dll`, viene en el wheel de PySide6) si el driver no da 3.3 core; ambos caminos satisfacen el viewport.
+> - **`installer/ingetrazo.iss`**: AppId GUID FIJO `63D1C88D-…` (NUNCA cambiarlo — rompe upgrades), licencia = LICENSE (GPL), asociación `.igz` en el registro, ícono `resources/icons/ingetrazo.ico` (multi-res, generado de los PNG).
+> - **`.github/workflows/build-windows.yml`**: corre en tags `v*` (adjunta al release solo) y por `workflow_dispatch`; Python **3.12** en CI (versión de referencia para wheels); humo del bundle (exe + shader + es.json + thumb presentes); ZIP portable + Inno (preinstalado en el runner). Primer build: verde a la primera (~5 min).
+> - **`main.py` abre argv[1]** (`MainWindow.open_path`, extraído de `_on_open`) — lo que la asociación `.igz` de Windows/Linux pasa al exe.
+> - **Pendiente que solo Marco puede hacer: probar el .exe en un Windows real** (humo visual: viewport GL, texturas, terreno con red, DPI). El build de CI valida empaquetado, no rendering.
+>
 > **Sesión 2026-07-14 (tarde) — BIM→IFC VALIDADO + puente IngePresupuestos FUNCIONANDO (puntos 1-3 del plan "PRÓXIMA SESIÓN" cumplidos).**
 > - **ifcopenshell 0.8.5 SÍ tiene wheel para Python 3.14** (el riesgo anotado no se materializó). Instalado en el venv como herramienta de dev — NO va a `requirements.txt`, el export sigue sin deps.
 > - **El `.ifc` a mano pasa TODO:** `ifcopenshell.validate` (schema + reglas EXPRESS) = cero issues; esqueleto espacial correcto; contención en Storey; `util.element.get_psets(qtos_only)` lee las cantidades; `ifcopenshell.geom.create_shape` tesela los 4 tipos de geometría (Brep cerrado y SurfaceModel) con coordenadas mundo exactas. Permanente en `tests/test_ifc_validation.py` (`importorskip` — se salta donde no está instalado).
