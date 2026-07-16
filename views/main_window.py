@@ -1343,16 +1343,25 @@ class MainWindow(QMainWindow):
         for the session and for saved documents) and import the result."""
         command = self._find_skp_converter()
         if command is None:
-            QMessageBox.information(
+            answer = QMessageBox.question(
                 self, tr("Import SKP"),
-                tr("Opening .skp needs the skp2dae converter.\n\n"
-                   "1. Get it from github.com/tuxiasumari/skp2dae\n"
-                   "2. Put skp2dae.exe plus SketchUpAPI.dll (the Blender "
-                   "'SketchUp Importer' add-on ships that DLL) in "
-                   "~/.local/share/skp2dae/\n"
-                   "3. On Linux, install Wine.\n\n"
-                   "IngeTrazo only launches it as a separate program."))
-            return False
+                tr("Opening .skp needs the skp2dae converter (a separate "
+                   "program IngeTrazo launches).\n\n"
+                   "Install it automatically? This downloads:\n"
+                   "• skp2dae.exe from the IngeTrazo releases (free "
+                   "software, MIT), and\n"
+                   "• the official SketchUp library (SketchUpAPI.dll) from "
+                   "the public release of Blender's 'SketchUp Importer' "
+                   "add-on (a third-party project).\n\n"
+                   "Everything lands in ~/.local/share/skp2dae/."),
+                QMessageBox.Yes | QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return False
+            if not self._install_skp_converter():
+                return False
+            command = self._find_skp_converter()
+            if command is None:
+                return False
         dae = skp.with_suffix(".dae")
         import subprocess
         from PySide6.QtCore import Qt as _Qt
@@ -1376,6 +1385,86 @@ class MainWindow(QMainWindow):
                 detail or tr("The converter produced no output."))
             return False
         self._import_dae_path(dae)
+        return True
+
+    # URL del exe limpio (solo codigo MIT: bindea la DLL en runtime, no
+    # contiene nada de Trimble) — se publica como asset de los releases.
+    _SKP2DAE_EXE_URL = ("https://github.com/tuxiasumari/ingetrazo/releases/"
+                        "latest/download/skp2dae.exe")
+    #: Repo público del add-on de Blender cuyo release trae SketchUpAPI.dll.
+    _SKP_ADDON_REPO = "RedHaloStudio/Sketchup_Importer"
+
+    @staticmethod
+    def _download_bytes(url: str, timeout: int = 120) -> bytes:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "IngeTrazo"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+
+    @staticmethod
+    def _extract_skp_dlls(zip_bytes: bytes, dest: Path) -> list[str]:
+        """Pull the SketchUp runtime DLLs out of the add-on zip into ``dest``.
+        Returns the names extracted (empty when none found)."""
+        import io
+        import zipfile
+        wanted = ("SketchUpAPI.dll", "SketchUpCommonPreferences.dll")
+        got = []
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for entry in zf.namelist():
+                base = entry.rsplit("/", 1)[-1]
+                if base in wanted and base not in got:
+                    (dest / base).write_bytes(zf.read(entry))
+                    got.append(base)
+        return got
+
+    def _install_skp_converter(self) -> bool:
+        """One-click install of the skp2dae converter for non-technical
+        users: the MIT exe comes from OUR releases; the proprietary SketchUp
+        DLL is fetched by the USER'S machine from the Blender add-on's own
+        public release (never hosted or redistributed by us)."""
+        import json as _json
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QApplication
+        dest = Path.home() / ".local" / "share" / "skp2dae"
+        dest.mkdir(parents=True, exist_ok=True)
+        QApplication.setOverrideCursor(_Qt.WaitCursor)
+        try:
+            self.statusBar().showMessage(tr("Downloading skp2dae…"))
+            QApplication.processEvents()
+            (dest / "skp2dae.exe").write_bytes(
+                self._download_bytes(self._SKP2DAE_EXE_URL))
+
+            self.statusBar().showMessage(
+                tr("Downloading the SketchUp library (Blender add-on)…"))
+            QApplication.processEvents()
+            api = (f"https://api.github.com/repos/{self._SKP_ADDON_REPO}"
+                   "/releases/latest")
+            release = _json.loads(self._download_bytes(api).decode("utf-8"))
+            asset_url = next(
+                a["browser_download_url"] for a in release.get("assets", [])
+                if a["name"].lower().endswith(".zip"))
+            got = self._extract_skp_dlls(
+                self._download_bytes(asset_url, timeout=300), dest)
+            if "SketchUpAPI.dll" not in got:
+                raise RuntimeError(
+                    tr("The add-on zip did not contain SketchUpAPI.dll"))
+        except Exception as exc:  # noqa: BLE001
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, tr("Import SKP"),
+                                 tr("Automatic install failed: {err}",
+                                    err=str(exc)))
+            return False
+        QApplication.restoreOverrideCursor()
+        import shutil as _shutil
+        import sys as _sys
+        if _sys.platform != "win32" and _shutil.which("wine") is None:
+            QMessageBox.information(
+                self, tr("Import SKP"),
+                tr("Converter installed, but Wine is missing. Install it "
+                   "with your package manager (e.g. sudo apt install wine) "
+                   "and try again."))
+            return False
+        self.statusBar().showMessage(tr("skp2dae converter installed"), 4000)
         return True
 
     def _on_import_skp(self) -> None:

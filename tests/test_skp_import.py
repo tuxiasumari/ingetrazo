@@ -83,3 +83,17 @@ def test_skp_import_end_to_end(fake_converter, tmp_path):
     total = len(scene.mesh.faces) + sum(
         len(g.mesh.faces) for g in scene.groups)
     assert total == 1                                  # el triangulo llego
+
+
+def test_extract_skp_dlls_from_addon_zip(tmp_path):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("sketchup_importer/SketchUpAPI.dll", b"fake-api")
+        zf.writestr("sketchup_importer/SketchUpCommonPreferences.dll", b"fake-prefs")
+        zf.writestr("sketchup_importer/otro.pyd", b"x")
+    got = MainWindow._extract_skp_dlls(buf.getvalue(), tmp_path)
+    assert sorted(got) == ["SketchUpAPI.dll", "SketchUpCommonPreferences.dll"]
+    assert (tmp_path / "SketchUpAPI.dll").read_bytes() == b"fake-api"
+    assert not (tmp_path / "otro.pyd").exists()
