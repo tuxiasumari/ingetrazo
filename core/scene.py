@@ -30,6 +30,8 @@ class Scene:
     groups: list = field(default_factory=list)
     # Annotation entities (static dimensions) — not geometry, drawn as overlays.
     dimensions: list = field(default_factory=list)
+    # Leader-text annotations (SketchUp's Text tool) — same overlay treatment.
+    text_labels: list = field(default_factory=list)
     # Georef traced paths (roads / boundaries / alignments) — first-class georef
     # entities, kept out of the topology mesh entirely (Track G).
     geo_paths: list = field(default_factory=list)
@@ -182,10 +184,11 @@ class Scene:
         if (self.mesh.edges or self.mesh.faces or self.selection
                 or self.groups or self.dimensions or self.georef
                 or self.tile_layer or self.geo_paths or self.terrain
-                or self.guides or self.geo_points):
+                or self.guides or self.geo_points or self.text_labels):
             self.mesh.clear()
             self.groups.clear()
             self.dimensions.clear()
+            self.text_labels.clear()
             self.geo_paths.clear()
             self.geo_points.clear()
             self.guides.clear()

@@ -555,6 +555,45 @@ class DeleteDimensionsCommand(Command):
         scene.version += 1
 
 
+class AddTextLabelCommand(Command):
+    """Add a leader-text annotation to ``scene.text_labels``."""
+
+    def __init__(self, label) -> None:
+        self.label = label
+
+    def do(self, scene) -> None:
+        scene.text_labels.append(self.label)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        if self.label in scene.text_labels:
+            scene.text_labels.remove(self.label)
+        scene.selection.discard(self.label)
+        scene.version += 1
+
+
+class DeleteTextLabelsCommand(Command):
+    """Remove a set of text labels from ``scene.text_labels``."""
+
+    def __init__(self, labels) -> None:
+        self._labels = list(labels)
+        self._restore: list[tuple[int, object]] = []
+
+    def do(self, scene) -> None:
+        self._restore = [(scene.text_labels.index(t), t)
+                         for t in self._labels if t in scene.text_labels]
+        for t in self._labels:
+            if t in scene.text_labels:
+                scene.text_labels.remove(t)
+            scene.selection.discard(t)
+        scene.version += 1
+
+    def undo(self, scene) -> None:
+        for i, t in sorted(self._restore):
+            scene.text_labels.insert(i, t)
+        scene.version += 1
+
+
 class AddGuideCommand(Command):
     """Add a construction guide (Tape Measure) to ``scene.guides``."""
 

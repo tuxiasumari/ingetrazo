@@ -357,6 +357,34 @@ def _view_cube(face, filled):
     return draw
 
 
+def _text(p, ink):
+    # An "A" with a leader line pointing down-left (SketchUp's Text).
+    f = p.font()
+    f.setPixelSize(24)
+    f.setBold(True)
+    p.setFont(f)
+    p.drawText(QPointF(20, 26), "A")
+    p.drawLine(QPointF(10, 38), QPointF(19, 29))
+    p.drawEllipse(QPointF(10, 38), 2.0, 2.0)
+
+
+def _text3d(p, ink):
+    # An extruded "A": the glyph plus a depth-shifted echo.
+    f = p.font()
+    f.setPixelSize(26)
+    f.setBold(True)
+    p.setFont(f)
+    pen = p.pen()
+    faded = QPen(pen)
+    c = QColor(ink)
+    c.setAlpha(110)
+    faded.setColor(c)
+    p.setPen(faded)
+    p.drawText(QPointF(19, 25), "A")
+    p.setPen(pen)
+    p.drawText(QPointF(13, 33), "A")
+
+
 _DRAW = {
     "select": _select, "line": _line, "rectangle": _rectangle,
     "rotated_rect": _rotated_rect, "circle": _circle, "polygon": _polygon,
@@ -364,6 +392,7 @@ _DRAW = {
     "rotate": _rotate, "scale": _scale, "followme": _followme, "pushpull": _pushpull, "offset": _offset,
     "move": _move, "paint": _paint, "dimension": _dimension,
     "geopath": _geopath, "orbit": _orbit, "pan": _pan,
+    "text": _text, "text3d": _text3d,
     "eraser": _eraser, "tape": _tape, "protractor": _protractor,
     "zoom_extents": _zoom_extents, "view_iso": _view_iso,
     # Standard views — solid face = near, hollow face = opposite.

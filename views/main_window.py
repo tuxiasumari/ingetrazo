@@ -48,6 +48,7 @@ from tools.geopath import GeoPathTool
 from tools.line import LineTool
 from tools.protractor import ProtractorTool
 from tools.tape import TapeMeasureTool
+from tools.text import TextTool
 from tools.move import MoveTool
 from tools.rotate import RotateTool
 from tools.scale import ScaleTool
@@ -95,6 +96,7 @@ class MainWindow(QMainWindow):
             "eraser": EraserTool(),
             "tape": TapeMeasureTool(),
             "protractor": ProtractorTool(),
+            "text": TextTool(),
             # Georef trace (Track G) — draws a GeoPath, never mesh geometry.
             "geopath": GeoPathTool(),
         }
@@ -199,7 +201,7 @@ class MainWindow(QMainWindow):
              ["line", "rectangle", "rotated_rect", "circle", "polygon",
               "arc", "arc3", "center_arc"]),
             ("modify", tr("Modify"), ["move", "rotate", "scale", "pushpull", "followme", "offset"]),
-            ("annotate", tr("Annotate"), ["tape", "protractor", "dimension", "geopath"]),
+            ("annotate", tr("Annotate"), ["tape", "protractor", "dimension", "text", "geopath"]),
         ]
         for oname, title, keys in layout:
             tb = self._new_toolbar(title, oname)
@@ -385,10 +387,14 @@ class MainWindow(QMainWindow):
                      ("move", "rotate", "scale"),
                      ("pushpull", "followme", "offset"),
                      ("tape", "protractor"),
-                     ("dimension",)):
+                     ("dimension", "text")):
             for key in keys:
                 tools_menu.addAction(self._tool_actions[key])
             tools_menu.addSeparator()
+        action_3dtext = QAction(tr("3D Text…"), self)
+        action_3dtext.triggered.connect(self._on_insert_3d_text)
+        tools_menu.addAction(action_3dtext)
+        tools_menu.addSeparator()
         action_profile = QAction(tr("Terrain profile of selection"), self)
         action_profile.triggered.connect(self._on_terrain_profile)
         tools_menu.addAction(action_profile)
@@ -1149,6 +1155,60 @@ class MainWindow(QMainWindow):
         _obj.load_obj(temp, path)
         group = Group(temp.mesh, name=tr(key.capitalize()))
         self._start_place(group)
+
+    def _on_insert_3d_text(self) -> None:
+        """SketchUp's 3D Text: a small dialog (text, font, bold, height,
+        thickness) generates REAL extruded geometry as a Group, handed to the
+        placement tool so it settles on the ground like any component."""
+        from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
+                                       QDoubleSpinBox, QFontComboBox,
+                                       QFormLayout, QLineEdit)
+        from core.group import Group
+        from core.text3d import build_text_mesh
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("3D Text"))
+        form = QFormLayout(dlg)
+        text_edit = QLineEdit(tr("IngeTrazo"))
+        form.addRow(tr("Text:"), text_edit)
+        font_box = QFontComboBox()
+        form.addRow(tr("Font:"), font_box)
+        bold_check = QCheckBox()
+        bold_check.setChecked(True)
+        form.addRow(tr("Bold:"), bold_check)
+        height_spin = QDoubleSpinBox()
+        height_spin.setRange(0.01, 100.0)
+        height_spin.setDecimals(2)
+        height_spin.setSingleStep(0.05)
+        height_spin.setValue(0.25)
+        height_spin.setSuffix(" m")
+        form.addRow(tr("Height:"), height_spin)
+        depth_spin = QDoubleSpinBox()
+        depth_spin.setRange(0.0, 10.0)
+        depth_spin.setDecimals(3)
+        depth_spin.setSingleStep(0.01)
+        depth_spin.setValue(0.05)
+        depth_spin.setSuffix(" m")
+        depth_spin.setToolTip(tr("0 leaves flat faces (no extrusion)"))
+        form.addRow(tr("Extruded:"), depth_spin)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok
+                                   | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        text = text_edit.text().strip()
+        if not text:
+            return
+        self.viewport.end_group_edit()
+        mesh = build_text_mesh(
+            text, font_box.currentFont().family(), bold_check.isChecked(),
+            False, height_spin.value(), depth_spin.value())
+        if not mesh.faces:
+            QMessageBox.warning(self, tr("3D Text"),
+                                tr("Could not build geometry for that text."))
+            return
+        self._start_place(Group(mesh, name=text[:24]))
 
     def _start_place(self, group) -> None:
         """Hand a freshly built component to the placement tool: it follows

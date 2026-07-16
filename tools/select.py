@@ -17,6 +17,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 
 from core.dimension import Dimension
+from core.textlabel import TextLabel
 from core.group import Group
 from core.mesh import Edge, Face
 from core.history import (
@@ -80,6 +81,10 @@ class SelectTool(Tool):
         dim = viewport.pick_dimension(screen_x, screen_y)
         if dim is not None:
             return dim
+        pick_label = getattr(viewport, "pick_text_label", None)
+        label = pick_label(screen_x, screen_y) if pick_label else None
+        if label is not None:
+            return label
         path = viewport.pick_geopath(screen_x, screen_y)
         if path is not None:
             return path
@@ -239,6 +244,7 @@ class SelectTool(Tool):
                 faces = [f for f in selection if isinstance(f, Face)]
                 groups = [g for g in selection if isinstance(g, Group)]
                 dims = [d for d in selection if isinstance(d, Dimension)]
+                labels = [t for t in selection if isinstance(t, TextLabel)]
                 paths = [p for p in selection if isinstance(p, GeoPath)]
                 commands = []
                 if edges or faces:
@@ -248,6 +254,8 @@ class SelectTool(Tool):
                 commands.extend(DeleteGroupCommand(g) for g in groups)
                 if dims:
                     commands.append(DeleteDimensionsCommand(dims))
+                if labels:
+                    commands.append(DeleteTextLabelsCommand(labels))
                 if paths:
                     commands.append(DeleteGeoPathsCommand(paths))
                 if commands:

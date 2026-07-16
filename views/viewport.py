@@ -548,6 +548,7 @@ class Viewport(QOpenGLWidget):
         self._draw_geo_paths(painter)
         self._draw_geo_points(painter)
         self._draw_dimensions(painter)
+        self._draw_text_labels(painter)
         painter.end()
         self.update()                               # repaint the widget
         return image
@@ -1928,6 +1929,9 @@ class Viewport(QOpenGLWidget):
         # Persistent dimension annotations
         self._draw_dimensions(painter)
 
+        # Leader-text annotations
+        self._draw_text_labels(painter)
+
         # Length measurement near rubber band
         self._draw_length_label(painter)
 
@@ -2227,6 +2231,45 @@ class Viewport(QOpenGLWidget):
         painter.setPen(QColor(255, 255, 255))
         for i, ln in enumerate(lines):
             painter.drawText(QPointF(x, y + fm.ascent() + i * fm.height()), ln)
+
+    def _draw_text_labels(self, painter: QPainter) -> None:
+        """Draw every leader-text annotation: a leader line from the anchor
+        (hidden where geometry occludes it, like dimensions) up to the label,
+        an anchor dot, and the multi-line text with a white halo."""
+        labels = getattr(self.scene, "text_labels", None)
+        if not labels:
+            return
+        style = getattr(self.scene, "dimension_style", {})
+        col = style.get("color", [45, 55, 75])
+        default_ink = QColor(col[0], col[1], col[2])
+        sel_ink = QColor(243, 115, 41)
+        selection = self.scene.selection
+        font = QFont()
+        font.setPointSize(int(style.get("font_size", 9)))
+        font.setBold(True)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        for lab in labels:
+            ink = (sel_ink if (lab in selection or lab is self._hover_entity)
+                   else default_ink)
+            pos = lab.position()
+            p_anchor = self._world_to_pixel(lab.anchor)
+            p_pos = self._world_to_pixel(pos)
+            if p_pos is None:
+                continue
+            painter.setPen(QPen(ink, 1.2))
+            self._draw_occluded_segment(painter, lab.anchor, pos)   # leader
+            if p_anchor is not None and not self._is_occluded(lab.anchor):
+                painter.setBrush(ink)
+                painter.drawEllipse(QPointF(*p_anchor), 2.5, 2.5)
+                painter.setBrush(Qt.NoBrush)
+            lines = lab.text.splitlines() or [""]
+            for i, line in enumerate(lines):
+                x, y = p_pos[0] + 6, p_pos[1] - 4 + i * fm.height()
+                painter.setPen(QPen(QColor(255, 255, 255, 230)))
+                painter.drawText(QPointF(x + 1, y + 1), line)
+                painter.setPen(QPen(ink))
+                painter.drawText(QPointF(x, y), line)
 
     def _draw_dimensions(self, painter: QPainter) -> None:
         """Draw every committed static dimension: extension lines from the
@@ -3339,6 +3382,27 @@ class Viewport(QOpenGLWidget):
                     best = dim
         return best
 
+    def pick_text_label(self, screen_x: float, screen_y: float):
+        """Return the leader-text label whose leader line or text position is
+        closest to the cursor within the pick threshold, or ``None``."""
+        labels = getattr(self.scene, "text_labels", None)
+        if not labels:
+            return None
+        best, best_d = None, self.pick_threshold_px * 2.0
+        for lab in labels:
+            pa = self._world_to_pixel(lab.anchor)
+            pp = self._world_to_pixel(lab.position())
+            if pp is None:
+                continue
+            d = math.hypot(pp[0] - screen_x, pp[1] - screen_y)
+            if pa is not None:
+                d = min(d, _point_to_segment_distance_2d(
+                    (screen_x, screen_y), pa, pp))
+            if d < best_d:
+                best_d = d
+                best = lab
+        return best
+
     def pick_geopath(self, screen_x: float, screen_y: float):
         """Return the georef path whose polyline is closest to the cursor within
         the pick threshold, or ``None`` (Track G)."""
@@ -3828,6 +3892,7 @@ class Viewport(QOpenGLWidget):
         x, y = ev.pos().x(), ev.pos().y()
         picked = (self.pick_group(x, y) or self.pick_edge(x, y)
                   or self.pick_geopath(x, y) or self.pick_dimension(x, y)
+                  or self.pick_text_label(x, y)
                   or self.pick_face(x, y))
         if picked is not None and picked not in self.scene.selection:
             self.scene.select([picked])
