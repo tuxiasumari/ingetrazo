@@ -61,6 +61,38 @@ def test_3d_text_empty_string_builds_nothing():
     assert not build_text_mesh("   ", "Sans").faces
 
 
+def test_3d_text_curve_seams_are_soft():
+    # The O's curved thickness must read smooth: wall-to-wall seams at a
+    # shallow dihedral are softened, while the front/back outlines stay hard.
+    mesh = build_text_mesh("O", "Sans", height=0.5, thickness=0.1)
+    soft = [e for e in mesh.edges if e.soft]
+    assert soft                                     # curved seams hidden
+    for e in soft:                                  # only wall-wall seams
+        for f in e.faces:
+            assert abs(f.normal().y()) < 0.5
+    # outline edges (front face <-> wall, ~90 deg) never soften
+    hard_outline = [
+        e for e in mesh.edges
+        if len(e.faces) == 2 and not e.soft
+        and any(abs(f.normal().y()) > 0.5 for f in e.faces)]
+    assert hard_outline
+
+
+def test_place_face_frame_maps_walls_and_floors():
+    from PySide6.QtGui import QVector3D
+    from tools.place_group import PlaceGroupTool
+    # wall facing -Y: sign stands upright, reading along +X
+    right, y_axis, up = PlaceGroupTool._face_frame(QVector3D(0, -1, 0))
+    assert (right - QVector3D(1, 0, 0)).length() < 1e-6
+    assert (up - QVector3D(0, 0, 1)).length() < 1e-6
+    assert (y_axis - QVector3D(0, 1, 0)).length() < 1e-6   # front -> -Y = normal
+    # floor facing +Z: text lies flat, its up pointing north
+    right, y_axis, up = PlaceGroupTool._face_frame(QVector3D(0, 0, 1))
+    assert (right - QVector3D(1, 0, 0)).length() < 1e-6
+    assert (up - QVector3D(0, 1, 0)).length() < 1e-6
+    assert (y_axis - QVector3D(0, 0, -1)).length() < 1e-6  # front faces up
+
+
 # ---- Leader text labels -------------------------------------------------------
 
 def test_label_commands_undo_redo():

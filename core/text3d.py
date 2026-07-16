@@ -141,4 +141,17 @@ def build_text_mesh(text: str, font_family: str = "", bold: bool = False,
                 x1, y1 = ring_pts[(i + 1) % n]
                 mesh.add_face([V(x0, y0, 0.0), V(x0, y0, thickness),
                                V(x1, y1, thickness), V(x1, y1, 0.0)])
+
+    # The walls are one quad per outline segment, so the flattened curves of
+    # a glyph leave vertical seams along the thickness. Soften wall-to-wall
+    # seams at a shallow dihedral (the push/pull curve-facet rule) so the
+    # sides read smooth; the front/back outlines (~90°) stay visible.
+    for e in mesh.edges:
+        if len(e.faces) != 2:
+            continue
+        n1 = e.faces[0].normal()
+        n2 = e.faces[1].normal()
+        if (abs(n1.y()) < 0.5 and abs(n2.y()) < 0.5
+                and QVector3D.dotProduct(n1, n2) > 0.85):
+            e.soft = True
     return mesh

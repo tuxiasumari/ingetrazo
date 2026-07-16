@@ -1208,14 +1208,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("3D Text"),
                                 tr("Could not build geometry for that text."))
             return
-        self._start_place(Group(mesh, name=text[:24]))
+        self._start_place(Group(mesh, name=text[:24]),
+                          align_to_face=True)
 
-    def _start_place(self, group) -> None:
+    def _start_place(self, group, align_to_face: bool = False) -> None:
         """Hand a freshly built component to the placement tool: it follows
         the cursor (settling on the ground plane by default) and a click
-        drops it — instead of dumping it at the origin."""
+        drops it — instead of dumping it at the origin. ``align_to_face``
+        (3D text) re-orients the group onto the face under the cursor."""
         from tools.place_group import PlaceGroupTool
-        self.viewport.set_active_tool(PlaceGroupTool(group))
+        self.viewport.set_active_tool(PlaceGroupTool(
+            group, align_to_face=align_to_face))
         for action in self._tool_actions.values():
             action.setChecked(False)
         self._tool_label.setText(
