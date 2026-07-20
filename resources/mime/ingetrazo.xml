@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MIME types for the file formats IngeTrazo works with, so the file manager
+  shows a branded document icon on them (cosmetic — it does NOT change which
+  program opens the files; the default opener stays whatever the user set).
+
+    .igz → application/x-ingetrazo         (IngeTrazo's own document)
+    .dae → model/vnd.collada+xml           (COLLADA — standard type; we only
+                                            attach an icon to it, keeping its
+                                            existing semantics/openers)
+    .skp → application/vnd.sketchup.skp    (SketchUp model)
+
+  Installed by scripts/install_desktop.sh into ~/.local/share/mime/packages/
+  followed by update-mime-database.
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (C) 2026 Marco Sumari Tellez and IngeTrazo contributors.
+-->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-ingetrazo">
+    <comment>IngeTrazo document</comment>
+    <comment xml:lang="es">Documento de IngeTrazo</comment>
+    <icon name="application-x-ingetrazo"/>
+    <glob pattern="*.igz"/>
+  </mime-type>
+
+  <mime-type type="model/vnd.collada+xml">
+    <comment>COLLADA 3D model</comment>
+    <comment xml:lang="es">Modelo 3D COLLADA</comment>
+    <icon name="model-vnd.collada+xml"/>
+    <glob pattern="*.dae"/>
+  </mime-type>
+
+  <mime-type type="application/vnd.sketchup.skp">
+    <comment>SketchUp model</comment>
+    <comment xml:lang="es">Modelo de SketchUp</comment>
+    <icon name="application-vnd.sketchup.skp"/>
+    <glob pattern="*.skp"/>
+  </mime-type>
+</mime-info>

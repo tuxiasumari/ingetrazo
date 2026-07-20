@@ -30,6 +30,8 @@ datas = [
     ('resources/shaders/*.frag',   'resources/shaders'),
     ('resources/icons/*.png',      'resources/icons'),
     ('resources/icons/*.ico',      'resources/icons'),
+    ('resources/icons/mimetypes/*.ico', 'resources/icons/mimetypes'),
+    ('resources/mime/*.xml',       'resources/mime'),
     ('resources/textures/*.png',   'resources/textures'),
     ('resources/textures/library.json', 'resources/textures'),
     ('resources/components/*.obj', 'resources/components'),

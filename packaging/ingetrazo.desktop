@@ -9,5 +9,5 @@ Exec=ingetrazo %f
 Icon=ingetrazo
 Terminal=false
 Categories=Graphics;3DGraphics;Engineering;
-MimeType=application/x-ingetrazo;
+MimeType=application/x-ingetrazo;model/vnd.collada+xml;application/vnd.sketchup.skp;
 StartupWMClass=ingetrazo
