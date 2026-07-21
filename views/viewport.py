@@ -1481,7 +1481,10 @@ class Viewport(QOpenGLWidget):
             if t and t.get("path"):
                 tex = t["path"]
                 break
-        if tex is None or w < 1e-9 or h < 1e-9:
+        # tex may stay None for a vector-art face-me (solid-colour faces,
+        # e.g. SketchUp's 2D person): picking/outline/snap still need the
+        # quad; the legacy textured-quad render skips texture-less groups.
+        if w < 1e-9 or h < 1e-9:
             return None
         d = self.camera.eye() - anchor
         d.setZ(0.0)
@@ -1579,17 +1582,28 @@ class Viewport(QOpenGLWidget):
             return cur[1]
         import numpy as np
         by_tex: dict = {}
+        by_color: dict = {}      # rgb tuple -> interleaved pos+uv (uv unused)
         n0 = None
+        best_area = 0.0
         for f in g.mesh.faces:
-            tex = f.attrs.get("texture")
-            if tex is None or not tex.get("path"):
-                continue
-            if n0 is None:
+            area = f.area() if hasattr(f, "area") else 0.0
+            if n0 is None or area > best_area:
                 n0 = f.normal()
-            self._append_textured_face(by_tex, f, tex)
+                best_area = area
+            tex = f.attrs.get("texture")
+            if tex is not None and tex.get("path"):
+                self._append_textured_face(by_tex, f, tex)
+                continue
+            # Solid-colour face (a vector-art person like SketchUp's Susan):
+            # same interleaved layout, uv ignored, drawn with u_color.
+            col = tuple(f.attrs.get("color") or (0.96, 0.95, 0.925))
+            buf = by_color.setdefault(col, array("f"))
+            for t0, t1, t2 in f.triangulate():
+                for p in (t0, t1, t2):
+                    buf.extend([p.x(), p.y(), p.z(), 0.0, 0.0])
         verts = g.mesh.vertices
         entry = None
-        if n0 is not None and verts and by_tex:
+        if n0 is not None and verts and (by_tex or by_color):
             xs = [v.position.x() for v in verts]
             ys = [v.position.y() for v in verts]
             anchor = np.array([(min(xs) + max(xs)) / 2,
@@ -1601,7 +1615,10 @@ class Viewport(QOpenGLWidget):
                 arrays = {p: np.frombuffer(buf.tobytes(),
                                            dtype=np.float32).reshape(-1, 5)
                           for p, buf in by_tex.items()}
-                entry = (arrays, anchor, nh)
+                colors = {c: np.frombuffer(buf.tobytes(),
+                                           dtype=np.float32).reshape(-1, 5)
+                          for c, buf in by_color.items()}
+                entry = (arrays, colors, anchor, nh)
         cache[id(g)] = (key, entry)
         return entry
 
@@ -1612,7 +1629,7 @@ class Viewport(QOpenGLWidget):
         base = self._faceme_base(g)
         if base is None:
             return
-        arrays, anchor, nh = base
+        arrays, colors, anchor, nh = base
         import numpy as np
         eye = self.camera.eye()
         d = np.array([eye.x() - anchor[0], eye.y() - anchor[1]])
@@ -1620,21 +1637,43 @@ class Viewport(QOpenGLWidget):
         d = nh if ln < 1e-9 else d / ln
         cos = float(nh[0] * d[0] + nh[1] * d[1])
         sin = float(nh[0] * d[1] - nh[1] * d[0])
-        for path, arr in arrays.items():
-            tex = self._get_texture(path)
-            if tex is None:
-                continue
+
+        def _rotated(arr):
             a = arr.copy()
             x = a[:, 0] - anchor[0]
             y = a[:, 1] - anchor[1]
             a[:, 0] = anchor[0] + cos * x - sin * y
             a[:, 1] = anchor[1] + sin * x + cos * y
+            return a
+
+        for path, arr in arrays.items():
+            tex = self._get_texture(path)
+            if tex is None:
+                continue
+            a = _rotated(arr)
             raw = a.tobytes()
             self._billboard_vbo.bind()
             self._billboard_vbo.allocate(raw, len(raw))
             self._billboard_vbo.release()
             tex.bind(0)
             self._gl.glDrawArrays(GL_TRIANGLES, 0, len(a))
+        if colors:
+            # Solid-colour runs (vector-art face-me like Susan): same VAO,
+            # texture sampling off, u_color per run; restore for the pass.
+            self._program.setUniformValue(self._loc_use_tex, 0)
+            for col, arr in colors.items():
+                r, gc, b = col[0], col[1], col[2]
+                self._program.setUniformValue(
+                    self._loc_color, QVector4D(r, gc, b, 1.0))
+                self._program.setUniformValue(
+                    self._loc_back_color, QVector4D(r, gc, b, 1.0))
+                a = _rotated(arr)
+                raw = a.tobytes()
+                self._billboard_vbo.bind()
+                self._billboard_vbo.allocate(raw, len(raw))
+                self._billboard_vbo.release()
+                self._gl.glDrawArrays(GL_TRIANGLES, 0, len(a))
+            self._program.setUniformValue(self._loc_use_tex, 1)
 
     def _upload_hover_face(self, face: Face) -> int:
         """Triangulate ``face`` into the hover-faces VBO. Returns vertex count."""
