@@ -524,7 +524,16 @@ def _adapt(model, name: str, skp_path=None):
 
     if not groups and not protos:
         return None
-    return {"backend": "openskp", "groups": groups, "protos": protos}
+    payload = {"backend": "openskp", "groups": groups, "protos": protos}
+    # The file's style back-face colour (our upstream PR openskp#10): adopt it
+    # so unpainted faces seen from behind read like they did for the author
+    # (instead of IngeTrazo's own blue-grey default).
+    for st in getattr(model, "styles", []) or []:
+        back = getattr(st, "back_color", None)
+        if back:
+            payload["back_color"] = tuple(c / 255.0 for c in back)
+            break
+    return payload
 
 
 def parse(path, progress=None):

@@ -174,6 +174,11 @@ def apply_payload(scene, payload) -> str:
             g = Group(mesh, name=pr.get("name"))
             g.xform = xf
             scene.groups.append(g)
+    back = payload.get("back_color")
+    if back and getattr(scene, "back_face_color", None) is None:
+        # Adopt the file's style back-face colour so unpainted faces seen
+        # from behind read like they did for the author.
+        scene.back_face_color = tuple(back)
     scene.version += 1
     return payload.get("backend", "?")
 

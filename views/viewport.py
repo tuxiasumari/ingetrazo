@@ -921,7 +921,10 @@ class Viewport(QOpenGLWidget):
                                       QVector4D(r, g, b, a))
 
     def _set_back_face_color(self) -> None:
-        r, g, b = self.BACK_FACE_COLOR
+        # A scene may override the tint (adopted from an imported .skp's
+        # style, so unpainted faces read like they did for the author).
+        r, g, b = (getattr(self.scene, "back_face_color", None)
+                   or self.BACK_FACE_COLOR)
         self._program.setUniformValue(self._loc_back_color,
                                       QVector4D(r, g, b, 1.0))
 

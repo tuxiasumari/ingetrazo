@@ -131,6 +131,9 @@ def save_scene(scene, path: Path) -> None:
     style = getattr(scene, "dimension_style", None)
     if style:
         payload["dimension_style"] = dict(style)
+    back = getattr(scene, "back_face_color", None)
+    if back:
+        payload["back_face_color"] = list(back)
     # Georeferencing datum (Track G) — optional block, written only when set so
     # ungeoreferenced documents stay terse and older readers ignore it.
     datum = getattr(scene, "georef", None)
@@ -214,6 +217,10 @@ def load_into(scene, path: Path) -> None:
     style = payload.get("dimension_style")
     if isinstance(style, dict):
         scene.dimension_style.update(style)
+
+    back = payload.get("back_face_color")
+    if isinstance(back, list) and len(back) == 3:
+        scene.back_face_color = tuple(float(c) for c in back)
 
     georef = payload.get("georef")
     if isinstance(georef, dict) and isinstance(georef.get("datum"), dict):

@@ -50,6 +50,10 @@ class Scene:
     # Display style for dimension annotations (edited from the Tray).
     dimension_style: dict = field(default_factory=lambda: {
         "decimals": 2, "units": "m", "font_size": 9, "color": [45, 55, 75]})
+    # Back-face tint override (RGB 0..1), e.g. adopted from an imported
+    # .skp's style so unpainted faces read like they did for the author.
+    # ``None`` = the viewport's default SketchUp blue-grey.
+    back_face_color: tuple | None = None
     # Georeferencing anchor (Track G). ``None`` until the user sets a datum;
     # once set, geodetic ↔ local-metre conversion goes through it. Terrain and
     # tiles are separate display-only objects added in later phases.
@@ -198,6 +202,7 @@ class Scene:
             self.georef = None
             self.tile_layer = None
             self.terrain = None
+            self.back_face_color = None
             self.active_ifc = None
             self.version += 1
 
