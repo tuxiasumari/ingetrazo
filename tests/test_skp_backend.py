@@ -301,6 +301,42 @@ def test_openskp_adapter_face_material_beats_inherited():
     assert payload["groups"][0]["faces"][0][2] == {"color": [0.0, 0.0, 1.0]}
 
 
+def test_openskp_adapter_bakes_positioned_texture_uvs(tmp_path):
+    # A face with Face.uv_transform (upstream PR openskp#6) gets exact
+    # per-face UVs baked as the "uvw" affine. Ground truth from the
+    # controlled SketchUp file: 1x1 m square, texture rotated 90 deg,
+    # 48x48 in tile — stored matrix maps texture->plane (invert to use).
+    from core.texture import affine_uv
+
+    root = _fake_definition(
+        id=0, name="ROOT_MODEL",
+        verts={1: (82.64, 0, 0), 2: (122.01, 0, 0), 3: (122.01, 39.37, 0),
+               4: (82.64, 39.37, 0)},
+        edges={10: (1, 2), 11: (2, 3), 12: (3, 4), 13: (4, 1)},
+        faces={20: [[(10, 1), (11, 1), (12, 1), (13, 1)]]},
+    )
+    root.faces[20].material_id = 5
+    root.faces[20].normal = (0.0, 0.0, 1.0)
+    root.faces[20].uv_transform = (0.0, 1.0, 0.0,
+                                   -1.0, 0.0, 0.0,
+                                   96.0, -96.0, 1.0)
+    tex = NS(filename="c.jpg", width=48.0, height=48.0, data=b"\xff\xd8x")
+    mat = NS(name="C", color=(1, 2, 3), transparency=1.0, id=5, texture=tex)
+    model = NS(definitions={0: root}, materials_by_id={5: mat})
+
+    skp = tmp_path / "m.skp"
+    skp.write_bytes(b"")
+    payload = skp_openskp._adapt(model, "m", skp_path=skp)
+    outer, holes, attrs = payload["groups"][0]["faces"][0]
+    uvw = attrs["texture"]["uvw"]
+    uvs = affine_uv(uvw, outer)
+    expect = [(2.0, 0.2784), (2.0, -0.5418), (2.8202, -0.5418),
+              (2.8202, 0.2784)]
+    for (u, v), (ue, ve) in zip(uvs, expect):
+        assert u == pytest.approx(ue, abs=2e-3)
+        assert v == pytest.approx(ve, abs=2e-3)
+
+
 def test_openskp_adapter_splits_prototypes_by_inherited_material(monkeypatch):
     # The same component painted red and green as a whole must NOT share one
     # prototype — one proto per inherited material.

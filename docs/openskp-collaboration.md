@@ -87,7 +87,21 @@ Contribution targets, most valuable first:
    exists but no face references it (`Material.id is None`). Everything else
    in the per-material area diff was name-normalisation noise (spaces vs
    underscores). Needs real reverse engineering of the image-entity tags.
-6. **Per-face texture mapping (upstream, located but not yet decoded)** —
+6. ✅ **Per-face texture mapping — DECODED and shipped** (2026-07-21). The
+   user authored the controlled experiment (`textura.skp`: untouched /
+   rotated / distorted squares) and it cracked the convention: the stored
+   3×3 row-major matrix maps **texture space → face plane**, so
+   ``uvq = [p·xr, p·yr, 1] @ inv(M)``, ``u = uvq[0]/uvq[2]/tile_w`` (plane
+   basis ``xr = normalize(Z×n)``, ``yr = n×xr``, inches; projective for
+   4-pin distortion). Validated to rms < 1e-5 on 150 photo-fitted flag
+   triangles vs SDK ground truth. **PR submitted**
+   ([openskp#6](https://github.com/iamahsanmehmood/openskp/pull/6)):
+   `Face.uv_transform` / `uv_transform_back` with the recipe documented.
+   IngeTrazo's adapter bakes the exact per-vertex UVs into the per-face
+   `uvw` affine its renderer already consumes — the Peru flag now shows
+   red *and* white. Original investigation notes kept below.
+
+   **(original notes)** Per-face texture mapping (upstream, located but not yet decoded) —
    photo-fitted/positioned textures (e.g. a waving Peru-flag mesh) carry a
    per-face mapping the parser doesn't read, so IngeTrazo's planar fallback
    shows a single corner of the image (the user's "solid red flag"). We

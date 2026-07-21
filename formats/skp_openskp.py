@@ -40,9 +40,9 @@ _INCH = 0.0254          # SketchUp internal unit → metres
 _MAX_DEPTH = 32         # guard against pathological instance nesting
 
 
-def _ring(defn, loop):
-    """Resolve one ``[(edge_id, sense), …]`` loop to a list of local-space
-    ``QVector3D`` (metres). Returns ``None`` on any dangling reference."""
+def _ring_raw(defn, loop):
+    """Resolve one ``[(edge_id, sense), …]`` loop to raw local ``(x, y, z)``
+    tuples in INCHES. Returns ``None`` on any dangling reference."""
     pts = []
     for eid, sense in loop:
         edge = defn.edges.get(eid)
@@ -52,8 +52,17 @@ def _ring(defn, loop):
         v = defn.vertices.get(vid)
         if v is None:
             return None
-        pts.append(QVector3D(v.x * _INCH, v.y * _INCH, v.z * _INCH))
+        pts.append((v.x, v.y, v.z))
     return pts
+
+
+def _ring(defn, loop):
+    """Resolve one ``[(edge_id, sense), …]`` loop to a list of local-space
+    ``QVector3D`` (metres). Returns ``None`` on any dangling reference."""
+    raw = _ring_raw(defn, loop)
+    if raw is None:
+        return None
+    return [QVector3D(x * _INCH, y * _INCH, z * _INCH) for x, y, z in raw]
 
 
 def _matrix(m) -> QMatrix4x4:
@@ -137,6 +146,101 @@ def _face_attrs(face, attr_map, inherited=None):
     return attr_map.get(mid) if mid is not None else None
 
 
+def _plane_basis(normal):
+    """SketchUp's canonical in-plane axes for a face normal — the basis its
+    per-face texture mapping is expressed in: ``xr = normalize(Z × n)``,
+    ``yr = n × xr``; for a vertical normal, ``xr = X`` and ``yr = ±Y``."""
+    n = QVector3D(*normal)
+    n.normalize()
+    if abs(n.x()) < 1e-9 and abs(n.y()) < 1e-9:
+        xr = QVector3D(1.0, 0.0, 0.0)
+        yr = QVector3D(0.0, 1.0 if n.z() > 0 else -1.0, 0.0)
+        return xr, yr
+    xr = QVector3D.crossProduct(QVector3D(0.0, 0.0, 1.0), n)
+    xr.normalize()
+    return xr, QVector3D.crossProduct(n, xr)
+
+
+def _positioned_uvs(face, raw_ring, tex):
+    """Per-vertex UVs for a face whose texture was positioned / photo-fitted
+    (``Face.uv_transform``, our upstream PR openskp#6), or ``None``.
+
+    The stored 3×3 row-major matrix maps texture space → face plane; the UV
+    of a local point ``p`` (INCHES) is ``[p·xr, p·yr, 1] @ inv(M)``, then
+    ``/q`` and ``/tile`` — the recipe calibrated against SDK ground truth
+    (exact for rotated and 4-pin distorted mappings alike)."""
+    mat = getattr(face, "uv_transform", None)
+    if mat is None or len(mat) != 9:
+        return None
+    tw = (tex.get("sw", 0.0) or 0.0) / _INCH   # tile back to inches
+    th = (tex.get("sh", 0.0) or 0.0) / _INCH
+    if tw <= 0 or th <= 0:
+        return None
+    m = [list(mat[0:3]), list(mat[3:6]), list(mat[6:9])]
+    # Invert the 3×3 (adjugate / determinant).
+    det = (m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1])
+           - m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0])
+           + m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]))
+    if abs(det) < 1e-15:
+        return None
+    inv = [[(m[1][1]*m[2][2]-m[1][2]*m[2][1])/det,
+            (m[0][2]*m[2][1]-m[0][1]*m[2][2])/det,
+            (m[0][1]*m[1][2]-m[0][2]*m[1][1])/det],
+           [(m[1][2]*m[2][0]-m[1][0]*m[2][2])/det,
+            (m[0][0]*m[2][2]-m[0][2]*m[2][0])/det,
+            (m[0][2]*m[1][0]-m[0][0]*m[1][2])/det],
+           [(m[1][0]*m[2][1]-m[1][1]*m[2][0])/det,
+            (m[0][1]*m[2][0]-m[0][0]*m[2][1])/det,
+            (m[0][0]*m[1][1]-m[0][1]*m[1][0])/det]]
+    xr, yr = _plane_basis(face.normal or (0.0, 0.0, 1.0))
+    uvs = []
+    for x, y, z in raw_ring:                    # local INCHES
+        p = QVector3D(x, y, z)
+        x2 = QVector3D.dotProduct(p, xr)
+        y2 = QVector3D.dotProduct(p, yr)
+        # row-vector: uvq = [x2, y2, 1] @ inv
+        u = x2*inv[0][0] + y2*inv[1][0] + inv[2][0]
+        v = x2*inv[0][1] + y2*inv[1][1] + inv[2][1]
+        q = x2*inv[0][2] + y2*inv[1][2] + inv[2][2]
+        if abs(q) < 1e-12:
+            return None
+        uvs.append((u/q/tw, v/q/th))
+    return uvs
+
+
+def _face_entry(defn, face, xform, attr_map, inherited=None):
+    """One payload face ``(outer, holes, attrs)`` for ``face`` transformed by
+    ``xform``, or ``None`` when degenerate. Bakes a positioned / photo-fitted
+    texture's exact per-face UVs (``Face.uv_transform``, upstream PR
+    openskp#6; computed in local inches) into a world→UV affine — the
+    ``"uvw"`` IngeTrazo's renderer and exporters already consume. Exact for
+    triangles; a per-face affine fit of the projective map otherwise."""
+    from core.texture import fit_uv_affine
+
+    loops = getattr(face, "loops", None)
+    if not loops:
+        return None
+    raw = _ring_raw(defn, loops[0])
+    if not raw or len(raw) < 3:
+        return None
+    outer = [xform.map(QVector3D(x * _INCH, y * _INCH, z * _INCH))
+             for x, y, z in raw]
+    holes = []
+    for lp in loops[1:]:
+        h = _ring(defn, lp)
+        if h and len(h) >= 3:
+            holes.append([xform.map(p) for p in h])
+    attrs = _face_attrs(face, attr_map, inherited)
+    if attrs and "texture" in attrs and \
+            getattr(face, "uv_transform", None) is not None:
+        uvs = _positioned_uvs(face, raw, attrs["texture"])
+        if uvs is not None:
+            uvw = fit_uv_affine(outer, uvs)
+            if uvw is not None:
+                attrs = {"texture": {**attrs["texture"], "uvw": uvw}}
+    return (outer, holes, attrs)
+
+
 def _collect(defn, xform, by_id, attr_map, out, depth, stack,
              proto_ids=frozenset(), proto_uses=None, inherited=None) -> None:
     """Append ``(outer, holes, attrs)`` faces for ``defn`` (transformed by
@@ -154,19 +258,9 @@ def _collect(defn, xform, by_id, attr_map, out, depth, stack,
         return
     stack = stack | {id(defn)}
     for face in defn.faces.values():
-        loops = getattr(face, "loops", None)
-        if not loops:
-            continue
-        outer = _ring(defn, loops[0])
-        if not outer or len(outer) < 3:
-            continue
-        outer = [xform.map(p) for p in outer]
-        holes = []
-        for lp in loops[1:]:
-            h = _ring(defn, lp)
-            if h and len(h) >= 3:
-                holes.append([xform.map(p) for p in h])
-        out.append((outer, holes, _face_attrs(face, attr_map, inherited)))
+        entry = _face_entry(defn, face, xform, attr_map, inherited)
+        if entry is not None:
+            out.append(entry)
     for ins in getattr(defn, "instances", []):
         rid = getattr(ins, "ref_idx", None)
         child = by_id.get(rid)
@@ -265,16 +359,11 @@ def _adapt(model, name: str, skp_path=None):
     for r in roots:
         # The root's own loose faces (no instance recursion).
         loose: list = []
+        ident = QMatrix4x4()
         for face in r.faces.values():
-            loops = getattr(face, "loops", None)
-            if not loops:
-                continue
-            outer = _ring(r, loops[0])
-            if not outer or len(outer) < 3:
-                continue
-            holes = [h for lp in loops[1:]
-                     if (h := _ring(r, lp)) and len(h) >= 3]
-            loose.append((outer, holes, _face_attrs(face, attr_map)))
+            entry = _face_entry(r, face, ident, attr_map)
+            if entry is not None:
+                loose.append(entry)
         if loose:
             groups.append({"name": name, "faces": loose})
         # Each top-level instance → its own group (or a shared-proto use).
