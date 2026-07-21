@@ -87,6 +87,27 @@ Contribution targets, most valuable first:
    exists but no face references it (`Material.id is None`). Everything else
    in the per-material area diff was name-normalisation noise (spaces vs
    underscores). Needs real reverse engineering of the image-entity tags.
+6. **Per-face texture mapping (upstream, located but not yet decoded)** —
+   photo-fitted/positioned textures (e.g. a waving Peru-flag mesh) carry a
+   per-face mapping the parser doesn't read, so IngeTrazo's planar fallback
+   shows a single corner of the image (the user's "solid red flag"). We
+   FOUND where it lives, per face, under the face's entity-info block:
+   `D007 → DC05 → DD05 → B136 → B236 → 1027 → 1127 (front) / 1227 (back)
+   → 1327 → { 1427: flag(=1), 1527: 9×f64 3×3 matrix, 1627: 3×f64 }` —
+   and the 9-double matrix is per-face and projective-looking (its [8]
+   element varies ≈0.98–1.06, the signature of SketchUp's 4-pin distorted
+   mapping). What's missing is the exact convention: tested affine and
+   homography readings (row/col-major, inverse, SketchUp-style plane axes)
+   against ground-truth UVs recovered from the DAE oracle (200 matched
+   triangles) — none closes (best rms ≈0.30 in wrapped UV). The 2D basis
+   SketchUp uses is not the naive normal-derived axes. Next step: a
+   CONTROLLED experiment — a minimal .skp authored in SketchUp with a
+   known positioned texture (unrotated square / 90°-rotated / distorted)
+   to calibrate the basis cleanly, instead of a photo-fitted waving mesh.
+   Related finds while digging: `D207` under the face's `D007` = the BACK
+   material (428921 on the flag), and `AF0D` = a repeated material ref —
+   both worth exposing upstream too (back-painted faces currently import
+   colourless).
 6. **Instance-tree misplacement (upstream, latent)** — found while digging
    into #3: in a real SU2022 file, an instance is attached to the wrong parent
    definition (Rodeo#2 under Derrick instead of the root) and a pure-wireframe
