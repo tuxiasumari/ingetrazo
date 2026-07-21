@@ -96,8 +96,17 @@ def _material_attrs(model, skp_path):
         if tex is not None and getattr(tex, "data", None):
             if tex_dir is None:
                 tex_dir = _texture_dir(skp_path)
-            img = tex_dir / (tex.filename or f"material_{mid}.png")
+            # SketchUp often stores the author's FULL original path as the
+            # texture filename ("C:\Users\...\toro.png", "P:/SketchUp
+            # projects/.../x.png") — reduce to a safe basename or the image
+            # lands in nonexistent subdirectories (or an unwritable name on
+            # Windows). On a basename collision with different bytes, prefix
+            # the material id.
+            safe = (tex.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+            img = tex_dir / (safe or f"material_{mid}.png")
             try:
+                if img.exists() and img.stat().st_size != len(tex.data):
+                    img = tex_dir / f"{mid}_{img.name}"
                 if not img.exists() or img.stat().st_size != len(tex.data):
                     img.write_bytes(tex.data)
             except OSError:
@@ -116,21 +125,31 @@ def _material_attrs(model, skp_path):
     return attrs
 
 
-def _face_attrs(face, attr_map):
-    """IngeTrazo ``Face.attrs`` for an OpenSKP face, or ``None``."""
+def _face_attrs(face, attr_map, inherited=None):
+    """IngeTrazo ``Face.attrs`` for an OpenSKP face, or ``None``.
+
+    A face with no material of its own inherits ``inherited`` — the material
+    painted on the nearest enclosing instance (SketchUp's "paint the
+    component" rule; ``Instance.material_id``, our upstream PR openskp#5)."""
     mid = getattr(face, "material_id", None)
+    if mid is None:
+        mid = inherited
     return attr_map.get(mid) if mid is not None else None
 
 
 def _collect(defn, xform, by_id, attr_map, out, depth, stack,
-             proto_ids=frozenset(), proto_uses=None) -> None:
+             proto_ids=frozenset(), proto_uses=None, inherited=None) -> None:
     """Append ``(outer, holes, attrs)`` faces for ``defn`` (transformed by
     ``xform``) and, recursively, for every definition its instances place.
 
+    ``inherited`` is the material of the nearest enclosing painted instance —
+    faces with no material of their own take it (SketchUp inheritance).
+
     When an instance references a definition in ``proto_ids``, its geometry is
     NOT flattened here — the composed placement matrix is recorded in
-    ``proto_uses[def_id]`` instead, so the shared prototype is built once and
-    every copy becomes an O(1) instance (``Group.xform``)."""
+    ``proto_uses[(def_id, inherited)]`` instead, so the shared prototype is
+    built once per inherited material and every copy becomes an O(1) instance
+    (``Group.xform``)."""
     if depth > _MAX_DEPTH or id(defn) in stack:
         return
     stack = stack | {id(defn)}
@@ -147,19 +166,20 @@ def _collect(defn, xform, by_id, attr_map, out, depth, stack,
             h = _ring(defn, lp)
             if h and len(h) >= 3:
                 holes.append([xform.map(p) for p in h])
-        out.append((outer, holes, _face_attrs(face, attr_map)))
+        out.append((outer, holes, _face_attrs(face, attr_map, inherited)))
     for ins in getattr(defn, "instances", []):
         rid = getattr(ins, "ref_idx", None)
         child = by_id.get(rid)
         if child is None:
             continue
         placed = xform * _matrix(ins.matrix)
+        child_inherited = getattr(ins, "material_id", None) or inherited
         cid = getattr(child, "id", None)
         if proto_uses is not None and cid in proto_ids:
-            proto_uses.setdefault(cid, []).append(placed)
+            proto_uses.setdefault((cid, child_inherited), []).append(placed)
             continue
         _collect(child, placed, by_id, attr_map, out, depth + 1, stack,
-                 proto_ids, proto_uses)
+                 proto_ids, proto_uses, child_inherited)
 
 
 def _subtree_polys(defn, by_id, memo, stack) -> int:
@@ -263,25 +283,29 @@ def _adapt(model, name: str, skp_path=None):
             if child is None:
                 continue
             placed = _matrix(ins.matrix)
+            inh = getattr(ins, "material_id", None)
             if getattr(child, "id", None) in proto_ids:
-                proto_uses.setdefault(child.id, []).append(placed)
+                proto_uses.setdefault((child.id, inh), []).append(placed)
                 continue
             sub: list = []
             _collect(child, placed, by_id, attr_map, sub, 0, set(),
-                     proto_ids, proto_uses)
+                     proto_ids, proto_uses, inh)
             if sub:
                 groups.append({"name": getattr(child, "name", None) or name,
                                "faces": sub})
 
-    # Build each shared prototype ONCE, in local coordinates. Nested proto
-    # references inside a prototype flatten into it (no proto-in-proto).
+    # Build each shared prototype ONCE, in local coordinates — per inherited
+    # material, so a component painted red and green as a whole yields two
+    # prototypes, not one wrongly shared. Nested proto references inside a
+    # prototype flatten into it (no proto-in-proto).
     protos: list = []
-    for did, xforms in proto_uses.items():
+    for (did, inh), xforms in proto_uses.items():
         d = by_id.get(did)
         if d is None or not xforms:
             continue
         local: list = []
-        _collect(d, QMatrix4x4(), by_id, attr_map, local, 0, set())
+        _collect(d, QMatrix4x4(), by_id, attr_map, local, 0, set(),
+                 inherited=inh)
         if local:
             protos.append({"name": getattr(d, "name", None) or name,
                            "faces": local, "instances": xforms})

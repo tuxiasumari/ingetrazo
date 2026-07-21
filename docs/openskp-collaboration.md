@@ -69,13 +69,31 @@ Contribution targets, most valuable first:
    fused path against raw polygons. Harness now uses `area_m2` as the
    fusion-invariant truth metric; IngeTrazo's `apply_payload` runs the same
    fusion pipeline as its DAE import. **No upstream work needed.**
-4. **Instance-tree misplacement (upstream, latent)** — found while digging
+4. ✅ **Instance-level materials — PR submitted**
+   ([openskp#5](https://github.com/iamahsanmehmood/openskp/pull/5), 2026-07-21):
+   `Instance.material_id` (the `D007`/`D107` under the `6419` node — SketchUp's
+   "paint the component"). Found on the plaza: 24/274 instances carry a
+   material (granite pergolas, wood floors). IngeTrazo's adapter now resolves
+   the inheritance (face material `None` → nearest painted ancestor;
+   prototypes split per inherited material so a red and a green copy don't
+   wrongly share). Also fixed on our side: texture filenames that are full
+   Windows paths (`C:\Users\...\toro.png`, `P:/SketchUp projects/...png`)
+   are reduced to a safe basename before writing.
+5. **Image entities (upstream, the next real gap)** — SketchUp *Image*
+   objects (a photo placed as an object — the signature of 2.5D tree
+   foliage) are a separate TLV entity class the parser doesn't extract.
+   Measured on the plaza: **444 m² of Celtis tree foliage** present in the
+   oracle but absent from the pure parse; the `Celtis_australis` material
+   exists but no face references it (`Material.id is None`). Everything else
+   in the per-material area diff was name-normalisation noise (spaces vs
+   underscores). Needs real reverse engineering of the image-entity tags.
+6. **Instance-tree misplacement (upstream, latent)** — found while digging
    into #3: in a real SU2022 file, an instance is attached to the wrong parent
    definition (Rodeo#2 under Derrick instead of the root) and a pure-wireframe
    component (`CASCO.dwg`, 137 verts / 156 edges, 0 faces) is never instanced.
    Positions happen to come out right; the hierarchy is wrong. Candidate for
    an upstream issue with repro.
-5. **Legacy MFC (v8–v20)** version coverage, if not already handled.
+7. **Legacy MFC (v8–v20)** version coverage, if not already handled.
 
 The differential harness lives at **`scripts/skp_diff.py`**:
 `python scripts/skp_diff.py model.skp` converts with skp2dae (oracle) and diffs a

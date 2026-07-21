@@ -265,3 +265,67 @@ def test_openskp_adapter_shares_repeated_components(monkeypatch):
     inst = [g for g in scene.groups if g.xform is not None]
     assert len(inst) == 2
     assert inst[0].mesh is inst[1].mesh
+
+
+def test_openskp_adapter_inherits_instance_material():
+    # SketchUp "paint the component": faces with material None inherit the
+    # enclosing instance's material_id (upstream PR openskp#5).
+    child = _tri_def(5, "Banca")            # faces carry material_id None
+    ins = NS(ref_idx=5, material_id=77,
+             matrix=[1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+    root = _fake_definition(id=0, name="ROOT_MODEL", verts={}, edges={},
+                            faces={}, instances=[ins])
+    wood = NS(name="Wood", color=(255, 0, 0), transparency=1.0, id=77,
+              texture=None)
+    model = NS(definitions={0: root, 5: child}, materials_by_id={77: wood})
+    payload = skp_openskp._adapt(model, "obra")
+
+    attrs = payload["groups"][0]["faces"][0][2]
+    assert attrs == {"color": [1.0, 0.0, 0.0]}
+
+
+def test_openskp_adapter_face_material_beats_inherited():
+    child = _tri_def(5, "Banca")
+    child.faces[20].material_id = 88        # face's own material wins
+    ins = NS(ref_idx=5, material_id=77,
+             matrix=[1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+    root = _fake_definition(id=0, name="ROOT_MODEL", verts={}, edges={},
+                            faces={}, instances=[ins])
+    mats = {77: NS(name="W", color=(255, 0, 0), transparency=1, id=77,
+                   texture=None),
+            88: NS(name="B", color=(0, 0, 255), transparency=1, id=88,
+                   texture=None)}
+    model = NS(definitions={0: root, 5: child}, materials_by_id=mats)
+    payload = skp_openskp._adapt(model, "obra")
+
+    assert payload["groups"][0]["faces"][0][2] == {"color": [0.0, 0.0, 1.0]}
+
+
+def test_openskp_adapter_splits_prototypes_by_inherited_material(monkeypatch):
+    # The same component painted red and green as a whole must NOT share one
+    # prototype — one proto per inherited material.
+    import formats.dae as dae_mod
+    monkeypatch.setattr(dae_mod, "_INST_MIN_POLYS", 1)
+    monkeypatch.setattr(dae_mod, "_INST_MIN_SAVED", 1)
+
+    child = _tri_def(5, "Poste")
+    i_red = NS(ref_idx=5, material_id=1,
+               matrix=[1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+    i_red2 = NS(ref_idx=5, material_id=1,
+                matrix=[1, 0, 0, 0, 1, 0, 0, 0, 1, 50, 0, 0, 1])
+    i_green = NS(ref_idx=5, material_id=2,
+                 matrix=[1, 0, 0, 0, 1, 0, 0, 0, 1, 100, 0, 0, 1])
+    root = _fake_definition(id=0, name="ROOT_MODEL", verts={}, edges={},
+                            faces={}, instances=[i_red, i_red2, i_green])
+    mats = {1: NS(name="R", color=(255, 0, 0), transparency=1, id=1,
+                  texture=None),
+            2: NS(name="G", color=(0, 255, 0), transparency=1, id=2,
+                  texture=None)}
+    model = NS(definitions={0: root, 5: child}, materials_by_id=mats)
+    payload = skp_openskp._adapt(model, "obra")
+
+    assert len(payload["protos"]) == 2      # one per inherited material
+    counts = sorted(len(p["instances"]) for p in payload["protos"])
+    assert counts == [1, 2]                 # 2 red copies share, 1 green alone
+    colors = sorted(p["faces"][0][2]["color"] for p in payload["protos"])
+    assert colors == [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]
