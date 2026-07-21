@@ -34,6 +34,11 @@ parse. This is legitimate output comparison — **never** DLL decompilation or
 copying SDK headers/internals into the parser. It matches the "observed `.skp`
 files + their COLLADA exports" methodology the reverse-engineering already uses.
 
+The differential harness lives at **`scripts/skp_diff.py`**:
+`python scripts/skp_diff.py model.skp` converts with skp2dae (oracle) and diffs a
+structural fingerprint against the pure backend's parse (unavailable until a
+backend is wired, in which case the run still validates the skp2dae output).
+
 ## Introduction issue (post upstream)
 
 **Title:** IngeTrazo (free SketchUp-alternative modeler) would like to
