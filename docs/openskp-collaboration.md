@@ -1,8 +1,10 @@
 # OpenSKP collaboration
 
-**Status:** draft — the introduction issue to post upstream, and the rationale
-for how IngeTrazo supports [OpenSKP](https://github.com/iamahsanmehmood/openskp)
-without becoming dependent on it.
+**Status:** introduction issue **posted** upstream
+([iamahsanmehmood/openskp#2](https://github.com/iamahsanmehmood/openskp/issues/2),
+2026-07-21). This doc keeps the rationale for how IngeTrazo supports
+[OpenSKP](https://github.com/iamahsanmehmood/openskp) without becoming dependent
+on it, plus the issue text for reference.
 
 ## Strategy: upstream-first, not upstream-dependent
 
