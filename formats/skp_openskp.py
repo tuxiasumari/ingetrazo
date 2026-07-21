@@ -266,6 +266,41 @@ def _image_has_cutout(path, cache={}) -> bool:
     return ok
 
 
+def _image_quad_faces(child, placed, attr_map, inherited):
+    """Payload faces for an Image entity's quad, with whole-picture UVs.
+
+    An image quad always shows the whole picture once, so per-vertex UV =
+    the vertex's normalised position on the LOCAL quad, baked as an exact
+    world→UV affine (the default planar projection would sample in world
+    space, after the placement rotation/scale — wrong region entirely)."""
+    from core.texture import fit_uv_affine
+
+    raws = [(_ring_raw(child, f.loops[0]) if getattr(f, "loops", None)
+             else None, f) for f in child.faces.values()]
+    pts = [p for raw, _f in raws if raw for p in raw]
+    if not pts:
+        return []
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    wspan = (x1 - x0) or 1.0
+    hspan = (y1 - y0) or 1.0
+    faces = []
+    for raw, face in raws:
+        if not raw or len(raw) < 3:
+            continue
+        outer = [placed.map(QVector3D(x * _INCH, y * _INCH, z * _INCH))
+                 for x, y, z in raw]
+        attrs = _face_attrs(face, attr_map, inherited)
+        if attrs and "texture" in attrs:
+            uvs = [((x - x0) / wspan, (y - y0) / hspan) for x, y, _z in raw]
+            uvw = fit_uv_affine(outer, uvs)
+            if uvw is not None:
+                attrs = {"texture": {**attrs["texture"], "uvw": uvw}}
+        faces.append((outer, [], attrs))
+    return faces
+
+
 def _collect(defn, xform, by_id, attr_map, out, depth, stack,
              proto_ids=frozenset(), proto_uses=None, inherited=None,
              image_uses=None) -> None:
@@ -295,10 +330,22 @@ def _collect(defn, xform, by_id, attr_map, out, depth, stack,
         placed = xform * _matrix(ins.matrix)
         child_inherited = getattr(ins, "material_id", None) or inherited
         cid = getattr(child, "id", None)
-        if image_uses is not None and getattr(child, "is_image", False):
-            # An Image entity (photo placed as an object): pulled out of its
-            # parent so it can become its own group — cutout images turn to
-            # face the camera (billboard), like the DAE face-me import.
+        if getattr(child, "is_image", False):
+            if image_uses is not None:
+                # An Image entity (photo placed as an object): pulled out of
+                # its parent so it can become its own group — cutout images
+                # turn to face the camera (billboard), like the DAE import.
+                image_uses.append((child, placed, child_inherited))
+            else:
+                # Inside a face-me component being flattened: the image
+                # stays part of it, with its whole-picture UVs.
+                out.extend(_image_quad_faces(child, placed, attr_map,
+                                             child_inherited))
+            continue
+        if image_uses is not None and \
+                getattr(child, "always_faces_camera", False):
+            # SketchUp's "always face camera" component (2D people like
+            # Susan): extracted as its own billboard group.
             image_uses.append((child, placed, child_inherited))
             continue
         if proto_uses is not None and cid in proto_ids:
@@ -377,12 +424,15 @@ def _adapt(model, name: str, skp_path=None):
     memo: dict = {}
     for r in roots:
         _census(r, by_id, uses, 0, set())
-    def _subtree_has_image(d, stack=frozenset()):
-        if id(d) in stack or getattr(d, "is_image", False):
-            return getattr(d, "is_image", False)
+    def _subtree_has_faceme(d, stack=frozenset()):
+        if getattr(d, "is_image", False) or \
+                getattr(d, "always_faces_camera", False):
+            return True
+        if id(d) in stack:
+            return False
         for ins in getattr(d, "instances", []):
             c = by_id.get(getattr(ins, "ref_idx", None))
-            if c is not None and _subtree_has_image(c, stack | {id(d)}):
+            if c is not None and _subtree_has_faceme(c, stack | {id(d)}):
                 return True
         return False
 
@@ -391,9 +441,10 @@ def _adapt(model, name: str, skp_path=None):
         d = by_id.get(did)
         if d is None or cnt < 2:
             continue
-        # Image-carrying subtrees are excluded from sharing: each copy's
-        # image must be extracted at its own world spot (billboard).
-        if _subtree_has_image(d):
+        # Face-me-carrying subtrees (images, face-camera components) are
+        # excluded from sharing: each copy's billboard needs its own world
+        # spot.
+        if _subtree_has_faceme(d):
             continue
         polys = _subtree_polys(d, by_id, memo, set())
         if polys >= _INST_MIN_POLYS and polys * (cnt - 1) >= _INST_MIN_SAVED:
@@ -419,7 +470,8 @@ def _adapt(model, name: str, skp_path=None):
                 continue
             placed = _matrix(ins.matrix)
             inh = getattr(ins, "material_id", None)
-            if getattr(child, "is_image", False):
+            if getattr(child, "is_image", False) or \
+                    getattr(child, "always_faces_camera", False):
                 image_uses.append((child, placed, inh))
                 continue
             if getattr(child, "id", None) in proto_ids:
@@ -435,42 +487,24 @@ def _adapt(model, name: str, skp_path=None):
     # Image entities → their own groups; cutout images (real alpha) become
     # face-me billboards that turn toward the camera, opaque photos stay
     # static panels — same rule as the DAE face-me import. An image quad
-    # always shows the WHOLE picture once: per-vertex UV = the vertex's
-    # normalised position on the local quad, baked as an exact world→UV
-    # affine (the default planar projection would sample in world space,
-    # after the placement rotation/scale — wrong region entirely).
-    from core.texture import fit_uv_affine
+    # always shows the WHOLE picture once (see _image_quad_faces). An
+    # "always faces camera" component (Susan) flattens its whole subtree
+    # into one billboard group — the flag decides, no heuristic needed.
     for child, placed, inh in image_uses:
-        raws = [(_ring_raw(child, f.loops[0]) if getattr(f, "loops", None)
-                 else None, f) for f in child.faces.values()]
-        pts = [p for raw, _f in raws if raw for p in raw]
-        if not pts:
-            continue
-        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
-        x0, x1 = min(xs), max(xs)
-        y0, y1 = min(ys), max(ys)
-        wspan = (x1 - x0) or 1.0
-        hspan = (y1 - y0) or 1.0
-        faces = []
-        for raw, face in raws:
-            if not raw or len(raw) < 3:
-                continue
-            outer = [placed.map(QVector3D(x * _INCH, y * _INCH, z * _INCH))
-                     for x, y, z in raw]
-            attrs = _face_attrs(face, attr_map, inh)
-            if attrs and "texture" in attrs:
-                uvs = [((x - x0) / wspan, (y - y0) / hspan) for x, y, _z in raw]
-                uvw = fit_uv_affine(outer, uvs)
-                if uvw is not None:
-                    attrs = {"texture": {**attrs["texture"], "uvw": uvw}}
-            faces.append((outer, [], attrs))
+        if getattr(child, "is_image", False):
+            faces = _image_quad_faces(child, placed, attr_map, inh)
+            tex = next((a["texture"]["path"] for _o, _h, a in faces
+                        if a and "texture" in a), None)
+            billboard = bool(tex and _image_has_cutout(tex))
+        else:
+            faces = []
+            _collect(child, placed, by_id, attr_map, faces, 0, set(),
+                     inherited=inh)
+            billboard = True
         if not faces:
             continue
-        tex = next((a["texture"]["path"] for _o, _h, a in faces
-                    if a and "texture" in a), None)
         groups.append({"name": getattr(child, "name", None) or name,
-                       "faces": faces,
-                       "billboard": bool(tex and _image_has_cutout(tex))})
+                       "faces": faces, "billboard": billboard})
 
     # Build each shared prototype ONCE, in local coordinates — per inherited
     # material, so a component painted red and green as a whole yields two

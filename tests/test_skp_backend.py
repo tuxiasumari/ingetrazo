@@ -389,6 +389,32 @@ def test_openskp_adapter_image_entities_become_billboards(tmp_path):
     assert bb["imagen#2"] is False
 
 
+def test_openskp_adapter_face_camera_component_becomes_billboard():
+    # A def with always_faces_camera=True (upstream PR openskp#9) — e.g. the
+    # classic 2D person "Susan", plain colours, no texture — flattens into
+    # its own billboard group. The flag decides; no alpha heuristic needed.
+    susan = _tri_def(5, "Susan")
+    susan.always_faces_camera = True
+    susan.faces[20].material_id = 9
+    ins = NS(ref_idx=5, material_id=None,
+             matrix=[1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+    root = _fake_definition(id=0, name="ROOT_MODEL", verts={}, edges={},
+                            faces={}, instances=[ins])
+    mats = {9: NS(name="Shirt", color=(0, 128, 0), transparency=1, id=9,
+                  texture=None)}
+    model = NS(definitions={0: root, 5: susan}, materials_by_id=mats)
+    payload = skp_openskp._adapt(model, "m")
+
+    g = {gp["name"]: gp for gp in payload["groups"]}["Susan"]
+    assert g["billboard"] is True
+    assert g["faces"][0][2] == {"color": [0.0, 128 / 255.0, 0.0]}
+
+    scene = Scene()
+    skp_format.apply_payload(scene, payload)
+    assert next(gr.billboard for gr in scene.groups
+                if gr.name == "Susan") == "mesh"
+
+
 def test_openskp_adapter_splits_prototypes_by_inherited_material(monkeypatch):
     # The same component painted red and green as a whole must NOT share one
     # prototype — one proto per inherited material.
