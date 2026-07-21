@@ -79,14 +79,20 @@ Contribution targets, most valuable first:
    wrongly share). Also fixed on our side: texture filenames that are full
    Windows paths (`C:\Users\...\toro.png`, `P:/SketchUp projects/...png`)
    are reduced to a safe basename before writing.
-5. **Image entities (upstream, the next real gap)** — SketchUp *Image*
-   objects (a photo placed as an object — the signature of 2.5D tree
-   foliage) are a separate TLV entity class the parser doesn't extract.
-   Measured on the plaza: **444 m² of Celtis tree foliage** present in the
-   oracle but absent from the pure parse; the `Celtis_australis` material
-   exists but no face references it (`Material.id is None`). Everything else
-   in the per-material area diff was name-normalisation noise (spaces vs
-   underscores). Needs real reverse engineering of the image-entity tags.
+5. ✅ **"Image entities" — solved (2026-07-21): it was an ENCODING bug, not a
+   missing entity class.** The tree foliage IS ordinary faces with the
+   Celtis material (front `D107` *and* back `AF0D`, photo-fitted
+   `uv_transform`) — but the parser decoded entity names as
+   `ascii, errors='ignore'`, so the TLV name `"Celtis_australis_s cópia"`
+   became `"...s cpia"`, failed the name join to the XML material file, and
+   the material was unresolvable. A guaranteed hit for any file authored in
+   Spanish/Portuguese/French. **PR submitted**
+   ([openskp#7](https://github.com/iamahsanmehmood/openskp/pull/7)): all six
+   decode sites switch to UTF-8. Measured after: Celtis foliage **445 m² vs
+   the oracle's 444**, total painted **2274 m² vs the oracle's 2205** — the
+   pure path now paints *more* than the Trimble DLL (instance-material
+   inheritance the SDK's DAE export drops). Lesson: a "missing feature" can
+   be a one-word bug — measure per-material before reverse-engineering.
 6. ✅ **Per-face texture mapping — DECODED and shipped** (2026-07-21). The
    user authored the controlled experiment (`textura.skp`: untouched /
    rotated / distorted squares) and it cracked the convention: the stored
