@@ -552,3 +552,36 @@ def test_openskp_adapter_translucent_material_carries_opacity(tmp_path):
     attrs = payload["groups"][0]["faces"][0][2]
     assert attrs["opacity"] == 0.27
     assert "uvw" in attrs["texture"]      # baking kept the opacity alongside
+
+
+def test_openskp_adapter_colorized_material_tints_shared_texture(tmp_path):
+    # A colourized copy ("[Name]1", type="2" — upstream PR: colorized flag)
+    # shares the source material's image bytes; the adapter must write a
+    # RE-TINTED copy under its own name (the base texture stays pristine)
+    # with the cutout alpha preserved.
+    from PySide6.QtGui import QImage, qRgba
+    png = tmp_path / "fence.png"
+    img = QImage(4, 4, QImage.Format_RGBA8888)
+    img.fill(qRgba(200, 200, 200, 255))          # grey weave...
+    img.setPixel(0, 0, qRgba(0, 0, 0, 0))        # ...with a cutout hole
+    img.save(str(png), "PNG")
+    base_bytes = png.read_bytes()
+
+    root = _tri_def(0, "ROOT_MODEL")
+    root.faces[20].material_id = 7
+    root.faces[20].normal = (0.0, 0.0, 1.0)
+    tex = NS(filename="fence.png", width=2.75, height=2.75, data=base_bytes)
+    mat = NS(name="[Fence]1", color=(27, 135, 59), transparency=1.0, id=7,
+             texture=tex, colorized=True, colorize_type=0)
+    model = NS(definitions={0: root}, materials_by_id={7: mat})
+    skp = tmp_path / "m.skp"
+    skp.write_bytes(b"")
+    payload = skp_openskp._adapt(model, "m", skp_path=skp)
+
+    attrs = payload["groups"][0]["faces"][0][2]
+    path = attrs["texture"]["path"]
+    assert path.endswith("7_fence.png")          # own name, base untouched
+    out = QImage(path).convertToFormat(QImage.Format_RGBA8888)
+    assert out.pixelColor(0, 0).alpha() == 0     # cutout survived the tint
+    c = out.pixelColor(2, 2)
+    assert c.green() > c.red() and c.green() > c.blue()   # shifted to green
