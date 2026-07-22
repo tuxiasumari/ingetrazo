@@ -389,6 +389,26 @@ def test_openskp_adapter_image_entities_become_billboards(tmp_path):
     assert bb["imagen#2"] is False
 
 
+def test_openskp_adapter_back_painted_face_flips_and_paints():
+    # A face painted ONLY on its back (Face.back_material_id, upstream PR
+    # openskp#11 — the garden-bed case) imports flipped with the back
+    # material, so the painted side fronts like it does in SketchUp.
+    root = _tri_def(0, "ROOT_MODEL")
+    root.faces[20].material_id = None
+    root.faces[20].back_material_id = 7
+    root.faces[20].normal = (0.0, 0.0, 1.0)
+    grass = NS(name="Grass", color=(0, 200, 0), transparency=1.0, id=7,
+               texture=None)
+    model = NS(definitions={0: root}, materials_by_id={7: grass})
+    payload = skp_openskp._adapt(model, "m")
+
+    outer, holes, attrs = payload["groups"][0]["faces"][0]
+    assert attrs == {"color": [0.0, 200 / 255.0, 0.0]}
+    # ring reversed: the original raw order was v(0,0),(10,0),(10,10) —
+    # flipped means the first output vertex is the original last one.
+    assert (round(outer[0].x(), 3), round(outer[0].y(), 3)) == (0.254, 0.254)
+
+
 def test_openskp_adapter_face_camera_component_becomes_billboard():
     # A def with always_faces_camera=True (upstream PR openskp#9) — e.g. the
     # classic 2D person "Susan", plain colours, no texture — flattens into

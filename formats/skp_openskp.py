@@ -161,15 +161,17 @@ def _plane_basis(normal):
     return xr, QVector3D.crossProduct(n, xr)
 
 
-def _positioned_uvs(face, raw_ring, tex):
+def _positioned_uvs(face, raw_ring, tex, matrix=None):
     """Per-vertex UVs for a face whose texture was positioned / photo-fitted
     (``Face.uv_transform``, our upstream PR openskp#6), or ``None``.
 
     The stored 3×3 row-major matrix maps texture space → face plane; the UV
     of a local point ``p`` (INCHES) is ``[p·xr, p·yr, 1] @ inv(M)``, then
     ``/q`` and ``/tile`` — the recipe calibrated against SDK ground truth
-    (exact for rotated and 4-pin distorted mappings alike)."""
-    mat = getattr(face, "uv_transform", None)
+    (exact for rotated and 4-pin distorted mappings alike). ``matrix``
+    overrides the face's front transform (e.g. ``uv_transform_back`` when
+    rendering a back-painted face)."""
+    mat = matrix if matrix is not None else getattr(face, "uv_transform", None)
     if mat is None or len(mat) != 9:
         return None
     tw = (tex.get("sw", 0.0) or 0.0) / _INCH   # tile back to inches
@@ -223,17 +225,33 @@ def _face_entry(defn, face, xform, attr_map, inherited=None):
     raw = _ring_raw(defn, loops[0])
     if not raw or len(raw) < 3:
         return None
+    attrs = _face_attrs(face, attr_map, inherited)
+    uv_mat = getattr(face, "uv_transform", None)
+    flipped = False
+    if attrs is None:
+        # Front unpainted but back painted (Face.back_material_id, upstream
+        # PR openskp#11 — the author painted the visible side of a
+        # downward-facing cap): show the back material and flip the face so
+        # the painted side fronts, exactly what "Reverse Faces + paint"
+        # would produce. SketchUp renders these green from behind; without
+        # this they'd import colourless.
+        battrs = attr_map.get(getattr(face, "back_material_id", None))
+        if battrs is not None:
+            attrs = battrs
+            uv_mat = getattr(face, "uv_transform_back", None)
+            raw = list(reversed(raw))
+            flipped = True
     outer = [xform.map(QVector3D(x * _INCH, y * _INCH, z * _INCH))
              for x, y, z in raw]
     holes = []
     for lp in loops[1:]:
         h = _ring(defn, lp)
         if h and len(h) >= 3:
+            if flipped:
+                h = list(reversed(h))
             holes.append([xform.map(p) for p in h])
-    attrs = _face_attrs(face, attr_map, inherited)
-    if attrs and "texture" in attrs and \
-            getattr(face, "uv_transform", None) is not None:
-        uvs = _positioned_uvs(face, raw, attrs["texture"])
+    if attrs and "texture" in attrs and uv_mat is not None:
+        uvs = _positioned_uvs(face, raw, attrs["texture"], matrix=uv_mat)
         if uvs is not None:
             uvw = fit_uv_affine(outer, uvs)
             if uvw is not None:
