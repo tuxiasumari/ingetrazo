@@ -8,6 +8,9 @@ uniform int u_use_vcolor;
 // Uniform opacity of the current draw (1.0 = opaque pass). Translucent
 // material runs (SketchUp trans with useTrans) draw last with this < 1.
 uniform float u_opacity;
+// Per-run diffuse shade for textured faces (colour faces bake it into
+// their vertex colours) — 1.0 everywhere else (billboards, previews).
+uniform float u_shade;
 
 in vec2 v_uv;
 in vec3 v_color;
@@ -37,10 +40,10 @@ void main() {
             int bx = int(mod(gl_FragCoord.x, 4.0));
             int by = int(mod(gl_FragCoord.y, 4.0));
             if (texel.a < BAYER[by * 4 + bx]) discard;
-            fragColor = vec4(texel.rgb, 1.0);
+            fragColor = vec4(texel.rgb * u_shade, 1.0);
             return;
         }
-        fragColor = vec4(texel.rgb, texel.a * u_opacity);
+        fragColor = vec4(texel.rgb * u_shade, texel.a * u_opacity);
     } else {
         // SketchUp-style face culling colours: front = paper white, back =
         // blue-grey. Orientation is guaranteed outward by the engine, so a

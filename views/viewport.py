@@ -458,6 +458,7 @@ class Viewport(QOpenGLWidget):
         self._loc_vcolor = self._program.attributeLocation("a_color")
         self._loc_use_vcolor = self._program.uniformLocation("u_use_vcolor")
         self._loc_opacity = self._program.uniformLocation("u_opacity")
+        self._loc_shade = self._program.uniformLocation("u_shade")
 
         # Axes rebuilt per frame (dash spacing scales with zoom), so dynamic.
         self._axes_vao, self._axes_vbo = self._create_dynamic()
@@ -599,6 +600,7 @@ class Viewport(QOpenGLWidget):
         self._program.setUniformValue(self._loc_tex, 0)  # sampler → unit 0
         self._program.setUniformValue(self._loc_use_vcolor, 0)
         self._program.setUniformValue1f(self._loc_opacity, 1.0)
+        self._program.setUniformValue1f(self._loc_shade, 1.0)
 
         # Sky / ground backdrop with a horizon anchored to the camera pitch —
         # premium SketchUp feel. Fixed on zoom (it's the point at infinity),
@@ -645,14 +647,16 @@ class Viewport(QOpenGLWidget):
             self._gl.glPolygonOffset(1.0, 1.0)
             self._program.setUniformValue(self._loc_use_tex, 1)
             self._tex_faces_vao.bind()
-            for path, start, count in self._tex_runs:
+            for (path, shade), start, count in self._tex_runs:
                 tex = self._get_texture(path)
                 if tex is None:
                     continue
+                self._program.setUniformValue1f(self._loc_shade, float(shade))
                 tex.bind(0)
                 self._gl.glDrawArrays(GL_TRIANGLES, start, count)
                 tex.release(0)
             self._tex_faces_vao.release()
+            self._program.setUniformValue1f(self._loc_shade, 1.0)
             self._program.setUniformValue(self._loc_use_tex, 0)
             self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
 
@@ -674,15 +678,17 @@ class Viewport(QOpenGLWidget):
             if self._ttex_runs:
                 self._program.setUniformValue(self._loc_use_tex, 1)
                 self._tex_faces_vao.bind()
-                for path, a, start, count in self._ttex_runs:
+                for (path, shade), a, start, count in self._ttex_runs:
                     tex = self._get_texture(path)
                     if tex is None:
                         continue
                     self._program.setUniformValue1f(self._loc_opacity, float(a))
+                    self._program.setUniformValue1f(self._loc_shade, float(shade))
                     tex.bind(0)
                     self._gl.glDrawArrays(GL_TRIANGLES, start, count)
                     tex.release(0)
                 self._tex_faces_vao.release()
+                self._program.setUniformValue1f(self._loc_shade, 1.0)
                 self._program.setUniformValue(self._loc_use_tex, 0)
             self._program.setUniformValue1f(self._loc_opacity, 1.0)
             self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
@@ -964,18 +970,27 @@ class Viewport(QOpenGLWidget):
         self._program.setUniformValue(self._loc_back_color,
                                       QVector4D(r, g, b, 1.0))
 
+    def _shade_factor(self, normal) -> float:
+        """Diffuse factor (0.62..1.0) of a face normal against the fixed
+        world light — quantised to 1/32 so it can key texture draw runs
+        without exploding the run count on curved surfaces."""
+        if normal.length() < 1e-9:
+            return 0.84375
+        # abs(): shading depends on the face's plane, not its winding — a
+        # flat plan whose faces happen to wind downward still reads bright,
+        # while a solid keeps its top-bright / sides-toned maquette look.
+        # The 0.62..1.0 range matches SketchUp's default-style contrast
+        # (measured on user models: its shaded walls sit near 0.65 of the
+        # lit tone) — the previous 0.80..1.0 read as "unshaded"/wrong
+        # colour next to a SketchUp render of the same building.
+        d = abs(QVector3D.dotProduct(normal.normalized(), self._LIGHT))
+        return round((0.62 + 0.38 * d) * 32.0) / 32.0
+
     def _shaded_color(self, base, normal):
         """Multiply ``base`` RGB by a subtle diffuse term from the face normal vs
         the fixed world light — the matte-model shading. Returns a clamped RGB
         tuple used as the render key (identical normals/colours group together)."""
-        if normal.length() < 1e-9:
-            shade = 0.90
-        else:
-            # abs(): shading depends on the face's plane, not its winding — a
-            # flat plan whose faces happen to wind downward still reads bright,
-            # while a solid keeps its top-bright / sides-toned maquette look.
-            d = abs(QVector3D.dotProduct(normal.normalized(), self._LIGHT))
-            shade = 0.80 + 0.20 * d                                     # 0.80..1.0
+        shade = self._shade_factor(normal)
         # Quantise to 1/64 steps: the tuple is the DRAW-RUN key, and a model
         # with thousands of distinct normals (imported trees, curved detail)
         # otherwise explodes into one draw call per unique shade — 63k draw
@@ -1464,20 +1479,20 @@ class Viewport(QOpenGLWidget):
         tex_parts = []
         self._tex_runs = []
         start = 0
-        for path in dict.fromkeys(list(by_texture) + list(group_texture)):
-            parts = ([by_texture[path].tobytes()] if path in by_texture else [])
-            parts += group_texture.get(path, [])
+        for key in dict.fromkeys(list(by_texture) + list(group_texture)):
+            parts = ([by_texture[key].tobytes()] if key in by_texture else [])
+            parts += group_texture.get(key, [])
             raw = b"".join(parts)
             tex_parts.append(raw)
             count = len(raw) // 20
-            self._tex_runs.append((path, start, count))
+            self._tex_runs.append((key, start, count))
             start += count
         self._ttex_runs = []
-        for (path, a) in sorted(ttex_runs):
-            raw = b"".join(ttex_runs[(path, a)])
+        for (key, a) in sorted(ttex_runs):
+            raw = b"".join(ttex_runs[(key, a)])
             tex_parts.append(raw)
             count = len(raw) // 20
-            self._ttex_runs.append((path, a, start, count))
+            self._ttex_runs.append((key, a, start, count))
             start += count
         tex_raw = b"".join(tex_parts)
         self._tex_faces_vbo.bind()
@@ -1494,15 +1509,18 @@ class Viewport(QOpenGLWidget):
         self.sceneVersionChanged.emit(self._edges_version)
 
     def _append_textured_face(self, by_texture: dict, face, tex: dict) -> None:
-        """Triangulate ``face`` into ``by_texture[path]`` as interleaved
-        ``pos(3) + uv(2)`` floats. UVs come from the face's fitted world→UV
-        affine map when present (``uvw`` — a DAE/OBJ import carrying its own
-        texture coordinates), else from the SketchUp-style planar projection
-        of each vertex's world position (so coplanar faces tile seamlessly)."""
-        path = tex["path"]
-        buf = by_texture.get(path)
+        """Triangulate ``face`` into ``by_texture[(path, shade)]`` as
+        interleaved ``pos(3) + uv(2)`` floats — the quantised diffuse shade
+        keys the draw run (the run sets ``u_shade``, so textures get the same
+        matte face shading as colour faces). UVs come from the face's fitted
+        world→UV affine map when present (``uvw`` — a DAE/OBJ import carrying
+        its own texture coordinates), else from the SketchUp-style planar
+        projection of each vertex's world position (so coplanar faces tile
+        seamlessly)."""
+        key = (tex["path"], self._shade_factor(face.normal()))
+        buf = by_texture.get(key)
         if buf is None:
-            buf = by_texture[path] = array("f")
+            buf = by_texture[key] = array("f")
         uvw = tex.get("uvw")
         if uvw:
             gu = QVector3D(uvw[0], uvw[1], uvw[2])
@@ -1722,7 +1740,8 @@ class Viewport(QOpenGLWidget):
             a[:, 1] = anchor[1] + sin * x + cos * y
             return a
 
-        for path, arr in arrays.items():
+        for (path, _shade), arr in arrays.items():
+            # billboards turn toward the camera: no fixed-normal shade
             tex = self._get_texture(path)
             if tex is None:
                 continue

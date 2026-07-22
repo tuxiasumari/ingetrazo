@@ -41,7 +41,7 @@ def _bind(vp):
     for name in ("_pick_index", "_ray_hits", "_hover_face_t", "pick_face",
                  "pick_face_any", "pick_edge", "pick_vertex", "_project_px",
                  "_np_mvp", "_group_chunk", "_append_textured_face",
-                 "_shaded_color", "_group_fp", "_gedge_screen",
+                 "_shaded_color", "_shade_factor", "_group_fp", "_gedge_screen",
                  "_nearby_group_edges", "_snap_scene",
                  "_billboard_snap_edges", "_billboard_quad",
                  "_instance_chunk", "_shift_instance_entry"):
