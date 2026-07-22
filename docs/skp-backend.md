@@ -27,6 +27,24 @@ Public API:
   files (legacy MFC **and** 2021+) begin with the same UTF-16 `SketchUp Model`
   marker (or a `PK` ZIP wrapper), so the *era* is **not** observable from the
   magic bytes — and doesn't need to be, since OpenSKP handles the range.
+
+## Legacy (pre-2021) MFC container — SUPPORTED (2026-07-22)
+
+Classic `.skp` files (SketchUp ≤2020; validated on real 2016/2017/2018
+models) are ONE uncompressed MFC `CArchive` stream with a global 1-based
+store map — no ZIP, no `model.dat`. Our fork adds
+`openskp/legacy.py`: a full walker (materials + textures, layers,
+half-edge kernel, definitions/instances/groups, face-camera flags, UV
+matrices, dims/texts/guides/section planes) that emits the same
+`full_parse()` dict, so `SkpFile.parse()` and the whole IngeTrazo seam
+work unchanged. Validated: exact face/edge/area/bbox parity on five
+user models against their SketchUp-Web VFF re-saves; `skp_diff`
+fingerprints identical through `apply_payload` (incl. materials and
+textures). Key decoding notes (where real files differ from the public
+2017 spec) are in the module docstring. Known gaps: files with fewer
+than 2 materials can't bootstrap the slot base yet (fall back to
+skp2dae), legacy colorized materials untinted, CImage entities and doc
+thumbnail skipped, positioned-texture UV parity unverified visually.
 - `can_handle(path) -> bool` — a pure backend is available and recognises it
   (does not guarantee a non-empty parse).
 - `parse_skp(path, progress=None) -> payload` — first backend that yields
