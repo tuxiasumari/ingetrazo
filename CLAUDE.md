@@ -122,15 +122,16 @@ docs/     skp-backend.md · openskp-collaboration.md · halfedge-migration-plan.
 
 ## 🎯 Pendientes (por prioridad tentativa)
 
-1. **Track .skp:** seguir paridad con archivos reales del usuario; upstream: issue instance-tree misplacement, MFC legacy, seguimiento de PRs #3–#13.
-2. **Lado IngePresupuestos** (sesión en aquel repo): `IFC_MAP` +RAILING/COVERING, preferir `Net*` sobre `Gross*`, mapear tags→partidas con el RAG "Sugerir partidas".
-3. **Flathub** (definido, sin empezar): IngeTrazo + IngeCAD; capturas PNG (videos opcionales WebM <10 MiB sin audio); `appstreamcli validate` fatal; el punto duro es PySide6+Qt6+GL en Flatpak. App-ID: `com.ingetrazo.IngeTrazo`.
-4. **Renders:** (2) glTF PBR + "Enviar a Blender" con plantilla → (3) sombras de sol en viewport → (4) AI render opcional. NUNCA motor fotorrealista propio.
-5. **Kit restante:** Tape Measure + guías (T) · Eraser (E) por arrastre · Outliner · Texture Position.
-6. **Motor (diferido, atacar cuando duela):** iceberg de solapes coplanares (~326/1000 secuencias, invisible al bench; pre-STL/IFC en serio) + los 4 xfail draw-side + rechazos del guard → resultados correctos. La salida de fondo es **A.3: identidad/attrs por REGIÓN a través del rebuild** (el rule-set de declaraciones llegó a su techo). Limitación conocida: `apply_rebuild` disuelve diagonales de usuario en planos tocados por push.
-7. **Perf de fondo:** grupos de referencia como arrays NumPy puros (import DAE 27 s → objetivo archivos 80 MB) · edición de mallas 17k+ tris.
-8. **Georref expansión:** G5 contornos · G6 fotogrametría + KML/GeoJSON/DXF · CSV import ya hecho.
-9. **v2:** planos profesionales (LayOut-equivalente), DWG/DXF (IngeCAD es el hermano 2D), IFC import, plugins públicos.
+1. **PRÓXIMA SESIÓN (definida 2026-07-21):** el usuario declaró **paridad visual con SketchUp lograda** en sus archivos reales; quedan (a) **detalles del render de transparencias** (afinar el look del pase translúcido/cutouts) y (b) **otras optimizaciones** de IngeTrazo.
+2. **Track .skp upstream:** issue instance-tree misplacement (hallado, sin reportar — lo único no reportado), MFC legacy, seguimiento de PRs #3–#13 + issue #2.
+3. **Lado IngePresupuestos** (sesión en aquel repo): `IFC_MAP` +RAILING/COVERING, preferir `Net*` sobre `Gross*`, mapear tags→partidas con el RAG "Sugerir partidas".
+4. **Flathub** (definido, sin empezar): IngeTrazo + IngeCAD; capturas PNG (videos opcionales WebM <10 MiB sin audio); `appstreamcli validate` fatal; el punto duro es PySide6+Qt6+GL en Flatpak. App-ID: `com.ingetrazo.IngeTrazo`.
+5. **Renders:** (2) glTF PBR + "Enviar a Blender" con plantilla → (3) sombras de sol en viewport → (4) AI render opcional. NUNCA motor fotorrealista propio.
+6. **Kit restante:** Tape Measure + guías (T) · Eraser (E) por arrastre · Outliner · Texture Position.
+7. **Motor (diferido, atacar cuando duela):** iceberg de solapes coplanares (~326/1000 secuencias, invisible al bench; pre-STL/IFC en serio) + los 4 xfail draw-side + rechazos del guard → resultados correctos. La salida de fondo es **A.3: identidad/attrs por REGIÓN a través del rebuild** (el rule-set de declaraciones llegó a su techo). Limitación conocida: `apply_rebuild` disuelve diagonales de usuario en planos tocados por push.
+8. **Perf de fondo:** grupos de referencia como arrays NumPy puros (import DAE 27 s → objetivo archivos 80 MB) · edición de mallas 17k+ tris.
+9. **Georref expansión:** G5 contornos · G6 fotogrametría + KML/GeoJSON/DXF · CSV import ya hecho.
+10. **v2:** planos profesionales (LayOut-equivalente), DWG/DXF (IngeCAD es el hermano 2D), IFC import, plugins públicos.
 
 ---
 
