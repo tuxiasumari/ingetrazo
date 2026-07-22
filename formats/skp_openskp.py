@@ -127,6 +127,35 @@ def _hls_to_rgb(hue, lum, sat):
                      channel(hue - 1.0 / 3.0)], axis=-1)
 
 
+def _needs_tint(data, declared_rgb) -> bool:
+    """Whether a colourized-flagged texture actually needs re-tinting: only
+    when the declared material colour differs from the image's (alpha-
+    weighted) average — i.e. the user really recoloured it. The legacy
+    format flags more materials than were ever tinted."""
+    if not data or declared_rgb is None:
+        return False
+    from PySide6.QtGui import QImage
+    img = QImage.fromData(data)
+    if img.isNull():
+        return False
+    img = img.convertToFormat(QImage.Format_ARGB32)
+    small = img.scaled(16, 16)
+    sr = sg = sb = sa = 0
+    for y in range(small.height()):
+        for x in range(small.width()):
+            c = small.pixelColor(x, y)
+            a = c.alpha()
+            sr += c.red() * a
+            sg += c.green() * a
+            sb += c.blue() * a
+            sa += a
+    if sa == 0:
+        return False
+    avg = (sr / sa, sg / sa, sb / sa)
+    d = max(abs(avg[i] - declared_rgb[i]) for i in range(3))
+    return d > 24.0
+
+
 def _colorize_image(data, target_rgb, ctype):
     """Re-tint a shared texture the way SketchUp renders a colourized
     material copy ("[Name]1", ``type="2"``).
@@ -200,11 +229,15 @@ def _material_attrs(model, skp_path):
             # the material id.
             safe = (tex.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
             data = tex.data
-            if getattr(mat, "colorized", False):
+            if getattr(mat, "colorized", False) and \
+                    _needs_tint(data, getattr(mat, "color", None)):
                 # Colourized copy ("[Name]1"): the stored image is SHARED
                 # with the source material — re-tint it toward the material
                 # colour (SketchUp shift/tint) and keep it under its own
-                # name so the base texture stays untouched.
+                # name so the base texture stays untouched. The _needs_tint
+                # guard skips materials whose declared colour already IS the
+                # image average (the legacy colourized flag is greedy —
+                # e.g. geolocation snapshots would go greyscale otherwise).
                 data = _colorize_image(
                     data, getattr(mat, "color", (128, 128, 128)),
                     getattr(mat, "colorize_type", 0))
@@ -266,7 +299,7 @@ def _plane_basis(normal):
     return xr, QVector3D.crossProduct(n, xr)
 
 
-def _positioned_uvs(face, raw_ring, tex, matrix=None):
+def _positioned_uvs(face, raw_ring, tex, matrix=None, projected=False):
     """Per-vertex UVs for a face whose texture was positioned / photo-fitted
     (``Face.uv_transform``, our upstream PR openskp#6), or ``None``.
 
@@ -299,12 +332,22 @@ def _positioned_uvs(face, raw_ring, tex, matrix=None):
            [(m[1][0]*m[2][1]-m[1][1]*m[2][0])/det,
             (m[0][1]*m[2][0]-m[0][0]*m[2][1])/det,
             (m[0][0]*m[1][1]-m[0][1]*m[1][0])/det]]
-    xr, yr = _plane_basis(face.normal or (0.0, 0.0, 1.0))
+    if projected:
+        # PROJECTED texture (Add Location terrain drape): the mapping runs
+        # in the projection plane — plan XY for the vertical drape — so
+        # every face of the terrain samples one continuous image regardless
+        # of its tilt. (Non-vertical projection axes are not decoded yet.)
+        xr = yr = None
+    else:
+        xr, yr = _plane_basis(face.normal or (0.0, 0.0, 1.0))
     uvs = []
     for x, y, z in raw_ring:                    # local INCHES
-        p = QVector3D(x, y, z)
-        x2 = QVector3D.dotProduct(p, xr)
-        y2 = QVector3D.dotProduct(p, yr)
+        if projected:
+            x2, y2 = x, y
+        else:
+            p = QVector3D(x, y, z)
+            x2 = QVector3D.dotProduct(p, xr)
+            y2 = QVector3D.dotProduct(p, yr)
         # row-vector: uvq = [x2, y2, 1] @ inv
         u = x2*inv[0][0] + y2*inv[1][0] + inv[2][0]
         v = x2*inv[0][1] + y2*inv[1][1] + inv[2][1]
@@ -359,12 +402,13 @@ def _face_entry(defn, face, xform, attr_map, inherited=None):
             if flipped:
                 h = list(reversed(h))
             holes.append([xform.map(p) for p in h])
-    def _bake_uvs(entry, uv_matrix):
+    def _bake_uvs(entry, uv_matrix, projected=False):
         """Return ``entry`` with the texture's per-face ``uvw`` baked in."""
         if not entry or "texture" not in entry:
             return entry
         if uv_matrix is not None:
-            uvs = _positioned_uvs(face, raw, entry["texture"], matrix=uv_matrix)
+            uvs = _positioned_uvs(face, raw, entry["texture"], matrix=uv_matrix,
+                                  projected=projected)
         else:
             # SketchUp's DEFAULT mapping runs in the face's LOCAL frame:
             # u = (p·xr)/tile, plane basis from the local normal (the recipe
@@ -390,7 +434,9 @@ def _face_entry(defn, face, xform, attr_map, inherited=None):
         return entry
 
     front_src = attrs
-    attrs = _bake_uvs(attrs, uv_mat)
+    uv_proj = (getattr(face, "uv_projected_back", False) if flipped
+               else getattr(face, "uv_projected", False))
+    attrs = _bake_uvs(attrs, uv_mat, uv_proj)
     # A face painted DIFFERENTLY on each side (SketchUp: front green wall,
     # back roof tiles — possibly via instance inheritance on the unpainted
     # side): carry the back side's material as attrs["back"]; the renderer
@@ -402,7 +448,8 @@ def _face_entry(defn, face, xform, attr_map, inherited=None):
             back_src = attr_map.get(inherited)
         if back_src is not None and back_src is not front_src:
             back = _bake_uvs(back_src,
-                             getattr(face, "uv_transform_back", None))
+                             getattr(face, "uv_transform_back", None),
+                             getattr(face, "uv_projected_back", False))
             base = dict(attrs) if attrs else {}
             base["back"] = back
             attrs = base
