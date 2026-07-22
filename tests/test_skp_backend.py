@@ -298,7 +298,10 @@ def test_openskp_adapter_face_material_beats_inherited():
     model = NS(definitions={0: root, 5: child}, materials_by_id=mats)
     payload = skp_openskp._adapt(model, "obra")
 
-    assert payload["groups"][0]["faces"][0][2] == {"color": [0.0, 0.0, 1.0]}
+    # The face's OWN material fronts; the unpainted back side shows the
+    # instance's inherited paint (SketchUp two-sided rule).
+    assert payload["groups"][0]["faces"][0][2] == {
+        "color": [0.0, 0.0, 1.0], "back": {"color": [1.0, 0.0, 0.0]}}
 
 
 def test_openskp_adapter_bakes_positioned_texture_uvs(tmp_path):

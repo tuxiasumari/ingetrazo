@@ -359,9 +359,12 @@ def _face_entry(defn, face, xform, attr_map, inherited=None):
             if flipped:
                 h = list(reversed(h))
             holes.append([xform.map(p) for p in h])
-    if attrs and "texture" in attrs:
-        if uv_mat is not None:
-            uvs = _positioned_uvs(face, raw, attrs["texture"], matrix=uv_mat)
+    def _bake_uvs(entry, uv_matrix):
+        """Return ``entry`` with the texture's per-face ``uvw`` baked in."""
+        if not entry or "texture" not in entry:
+            return entry
+        if uv_matrix is not None:
+            uvs = _positioned_uvs(face, raw, entry["texture"], matrix=uv_matrix)
         else:
             # SketchUp's DEFAULT mapping runs in the face's LOCAL frame:
             # u = (p·xr)/tile, plane basis from the local normal (the recipe
@@ -369,7 +372,7 @@ def _face_entry(defn, face, xform, attr_map, inherited=None):
             # keeps every slat of a component sampling the same patch — a
             # world-space projection would give each slat (and each copy) a
             # different slice of the tile.
-            tex = attrs["texture"]
+            tex = entry["texture"]
             tw = (tex.get("sw", 0.0) or 0.0) / _INCH
             th = (tex.get("sh", 0.0) or 0.0) / _INCH
             uvs = None
@@ -383,7 +386,26 @@ def _face_entry(defn, face, xform, attr_map, inherited=None):
         if uvs is not None:
             uvw = fit_uv_affine(outer, uvs)
             if uvw is not None:
-                attrs = {**attrs, "texture": {**attrs["texture"], "uvw": uvw}}
+                return {**entry, "texture": {**entry["texture"], "uvw": uvw}}
+        return entry
+
+    front_src = attrs
+    attrs = _bake_uvs(attrs, uv_mat)
+    # A face painted DIFFERENTLY on each side (SketchUp: front green wall,
+    # back roof tiles — possibly via instance inheritance on the unpainted
+    # side): carry the back side's material as attrs["back"]; the renderer
+    # shows it only from behind. Flipped faces already front their painted
+    # side, and same-material sides stay plain double-sided.
+    if not flipped:
+        back_src = attr_map.get(getattr(face, "back_material_id", None))
+        if back_src is None and inherited is not None:
+            back_src = attr_map.get(inherited)
+        if back_src is not None and back_src is not front_src:
+            back = _bake_uvs(back_src,
+                             getattr(face, "uv_transform_back", None))
+            base = dict(attrs) if attrs else {}
+            base["back"] = back
+            attrs = base
     return (outer, holes, attrs)
 
 

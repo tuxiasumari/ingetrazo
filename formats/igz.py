@@ -62,6 +62,12 @@ def _face_json(f) -> dict:
     ifc = getattr(f, "attrs", {}).get("ifc")
     if ifc is not None:
         entry["ifc"] = dict(ifc)
+    opacity = getattr(f, "attrs", {}).get("opacity")
+    if opacity is not None:
+        entry["opacity"] = float(opacity)
+    back = getattr(f, "attrs", {}).get("back")
+    if isinstance(back, dict):
+        entry["back"] = dict(back)
     return entry
 
 
@@ -277,3 +283,7 @@ def _load_mesh(mesh, payload) -> None:
                 face.attrs["layer"] = raw["layer"]
             if raw.get("ifc"):
                 face.attrs["ifc"] = dict(raw["ifc"])
+            if raw.get("opacity") is not None:
+                face.attrs["opacity"] = float(raw["opacity"])
+            if isinstance(raw.get("back"), dict):
+                face.attrs["back"] = dict(raw["back"])
