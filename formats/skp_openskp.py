@@ -447,9 +447,26 @@ def _image_quad_faces(child, placed, attr_map, inherited):
     return faces
 
 
+def _soft_edge_segments(defn, xform, out) -> None:
+    """Append the transformed endpoint pairs of ``defn``'s soft/smooth/
+    hidden edges to ``out`` — the file's own edge-display flags, used by
+    ``apply_payload`` instead of angle-based softening."""
+    for e in getattr(defn, "edges", {}).values():
+        if not (getattr(e, "soft", False) or getattr(e, "smooth", False)
+                or getattr(e, "hidden", False)):
+            continue
+        va = defn.vertices.get(e.v1_id)
+        vb = defn.vertices.get(e.v2_id)
+        if va is None or vb is None:
+            continue
+        pa = xform.map(QVector3D(va.x * _INCH, va.y * _INCH, va.z * _INCH))
+        pb = xform.map(QVector3D(vb.x * _INCH, vb.y * _INCH, vb.z * _INCH))
+        out.append(((pa.x(), pa.y(), pa.z()), (pb.x(), pb.y(), pb.z())))
+
+
 def _collect(defn, xform, by_id, attr_map, out, depth, stack,
              proto_ids=frozenset(), proto_uses=None, inherited=None,
-             image_uses=None) -> None:
+             image_uses=None, edges_out=None) -> None:
     """Append ``(outer, holes, attrs)`` faces for ``defn`` (transformed by
     ``xform``) and, recursively, for every definition its instances place.
 
@@ -468,6 +485,8 @@ def _collect(defn, xform, by_id, attr_map, out, depth, stack,
         entry = _face_entry(defn, face, xform, attr_map, inherited)
         if entry is not None:
             out.append(entry)
+    if edges_out is not None:
+        _soft_edge_segments(defn, xform, edges_out)
     for ins in getattr(defn, "instances", []):
         rid = getattr(ins, "ref_idx", None)
         child = by_id.get(rid)
@@ -498,7 +517,8 @@ def _collect(defn, xform, by_id, attr_map, out, depth, stack,
             proto_uses.setdefault((cid, child_inherited), []).append(placed)
             continue
         _collect(child, placed, by_id, attr_map, out, depth + 1, stack,
-                 proto_ids, proto_uses, child_inherited, image_uses)
+                 proto_ids, proto_uses, child_inherited, image_uses,
+                 edges_out)
 
 
 def _subtree_polys(defn, by_id, memo, stack) -> int:
@@ -608,7 +628,10 @@ def _adapt(model, name: str, skp_path=None):
             if entry is not None:
                 loose.append(entry)
         if loose:
-            groups.append({"name": name, "faces": loose})
+            loose_edges: list = []
+            _soft_edge_segments(r, ident, loose_edges)
+            groups.append({"name": name, "faces": loose,
+                           "soft_edges": loose_edges})
         # Each top-level instance → its own group (or a shared-proto use).
         for ins in getattr(r, "instances", []):
             child = by_id.get(getattr(ins, "ref_idx", None))
@@ -624,11 +647,12 @@ def _adapt(model, name: str, skp_path=None):
                 proto_uses.setdefault((child.id, inh), []).append(placed)
                 continue
             sub: list = []
+            sub_edges: list = []
             _collect(child, placed, by_id, attr_map, sub, 0, set(),
-                     proto_ids, proto_uses, inh, image_uses)
+                     proto_ids, proto_uses, inh, image_uses, sub_edges)
             if sub:
                 groups.append({"name": getattr(child, "name", None) or name,
-                               "faces": sub})
+                               "faces": sub, "soft_edges": sub_edges})
 
     # Image entities → their own groups; cutout images (real alpha) become
     # face-me billboards that turn toward the camera, opaque photos stay
@@ -662,11 +686,13 @@ def _adapt(model, name: str, skp_path=None):
         if d is None or not xforms:
             continue
         local: list = []
+        local_edges: list = []
         _collect(d, QMatrix4x4(), by_id, attr_map, local, 0, set(),
-                 inherited=inh)
+                 inherited=inh, edges_out=local_edges)
         if local:
             protos.append({"name": getattr(d, "name", None) or name,
-                           "faces": local, "instances": xforms})
+                           "faces": local, "instances": xforms,
+                           "soft_edges": local_edges})
 
     if not groups and not protos:
         return None

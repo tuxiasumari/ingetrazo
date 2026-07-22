@@ -135,8 +135,34 @@ def apply_payload(scene, payload) -> str:
     from formats.dae import _add_fused
     from formats.fuse import fuse_coplanar_loops, soften_smooth_edges
 
-    def _build_mesh(faces):
+    def _build_mesh(faces, soft_edges=None):
         mesh = Mesh()
+        if soft_edges is not None:
+            # The backend carried SketchUp's ORIGINAL polygons plus the
+            # file's own per-edge display flags — add everything as-is and
+            # soften exactly the flagged edges. No coplanar fusion: SketchUp
+            # keeps coplanar same-material faces separate with their edges
+            # visible (glass mullions, beam/column lines), so fusing them
+            # dissolved real user lines.
+            for outer, holes, attrs in faces:
+                try:
+                    face = mesh.add_face(outer, holes or None)
+                except Exception:  # noqa: BLE001 — skip a degenerate polygon
+                    continue
+                if attrs:
+                    face.attrs.update(attrs)
+            if soft_edges:
+                def _k(p):
+                    return (round(p[0], 5), round(p[1], 5), round(p[2], 5))
+                wanted = {frozenset((_k(a), _k(b))) for a, b in soft_edges}
+                for e in mesh.edges:
+                    a = e.v0.position
+                    b = e.v1.position
+                    if frozenset((_k((a.x(), a.y(), a.z())),
+                                  _k((b.x(), b.y(), b.z())))) in wanted:
+                        e.soft = True
+            return mesh
+        # Legacy payloads without edge flags: the DAE-style clean-up.
         # Fusion works on plain loops; faces with holes (window rings) keep
         # their explicit topology and are added directly.
         raw = [(outer, attrs) for outer, holes, attrs in faces if not holes]
@@ -155,7 +181,7 @@ def apply_payload(scene, payload) -> str:
         return mesh
 
     for gp in payload.get("groups", []):
-        mesh = _build_mesh(gp["faces"])
+        mesh = _build_mesh(gp["faces"], gp.get("soft_edges"))
         if mesh.faces:
             g = Group(mesh, name=gp.get("name"))
             if gp.get("billboard"):
@@ -167,7 +193,7 @@ def apply_payload(scene, payload) -> str:
     # Shared components: ONE prototype mesh (local coordinates), one Group per
     # placement with only a local->world matrix (Components v1 instances).
     for pr in payload.get("protos", []):
-        mesh = _build_mesh(pr["faces"])
+        mesh = _build_mesh(pr["faces"], pr.get("soft_edges"))
         if not mesh.faces:
             continue
         for xf in pr.get("instances", []):
