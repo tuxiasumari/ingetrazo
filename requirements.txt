@@ -9,6 +9,10 @@
 # --- Runtime ---
 PySide6>=6.7
 numpy>=1.26        # DEM heightfield decode + sampling (georef Track G, G2)
+# .skp import (pure Python, VFF 2021+ AND classic MFC 2013-2020) — our
+# openskp fork; local dev typically uses `pip install -e
+# ~/openskp/packages/python` instead.
+openskp @ git+https://github.com/tuxiasumari/openskp@ingetrazo#subdirectory=packages/python
 
 # --- Development ---
 pytest>=8.0

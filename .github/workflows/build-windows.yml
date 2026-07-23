@@ -34,6 +34,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install PySide6 numpy pyinstaller
+          # openskp NATIVO: nuestro fork (parser VFF + legacy MFC). Pineado
+          # por SHA para builds reproducibles; actualizar el SHA al avanzar
+          # la rama ingetrazo del fork.
+          pip install "openskp @ git+https://github.com/tuxiasumari/openskp@7f645c6c3e4c20ee800d2c888988db1b6d640ac2#subdirectory=packages/python"
+          python -c "import openskp, openskp.legacy; print('openskp OK:', openskp.__name__)" 
 
       - name: Compilar con PyInstaller
         shell: bash

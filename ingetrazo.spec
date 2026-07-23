@@ -64,6 +64,19 @@ hiddenimports = [
     'georef.terrain',
     'georef.dem',
     'georef.profile',
+    # Pure-Python .skp backend (our openskp fork with the classic-MFC
+    # reader) — imported lazily by formats/skp.py.
+    'openskp',
+    'openskp.model',
+    'openskp._core',
+    'openskp.legacy',
+    'openskp.vff',
+    'openskp.parser',
+    'openskp.geometry',
+    'openskp.transforms',
+    'openskp.materials',
+    'openskp.metadata',
+    'openskp.triangulator',
 ]
 
 excludes = [
