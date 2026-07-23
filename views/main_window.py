@@ -1341,6 +1341,58 @@ class MainWindow(QMainWindow):
 
         return dlg, cb
 
+    def _parse_skp_threaded(self, skp, cb):
+        """Parse ``skp`` off the UI thread, keeping the event loop responsive.
+
+        Returns ``(payload, exc)`` — ``payload`` is the parsed geometry (or
+        ``None``), ``exc`` is a ``NeedsConverter`` (fall back to skp2dae), any
+        other exception (real failure), or ``None``. The parse touches no
+        ``Scene`` so it is safe off-thread; ``apply_payload`` runs on the UI
+        thread in the caller. A local ``QEventLoop`` blocks here until the
+        worker finishes, so the method stays synchronous while the window and
+        its progress dialog keep painting."""
+        from PySide6.QtCore import QThread, QObject, QEventLoop, Signal, Qt
+
+        from formats import skp as skp_format
+
+        class _Worker(QObject):
+            progressed = Signal(float, str)
+            finished = Signal(object, object)   # (payload, exc)
+
+            def run(self):
+                try:
+                    payload = skp_format.parse_skp(
+                        skp, progress=lambda f, t: self.progressed.emit(f, t))
+                    self.finished.emit(payload, None)
+                except Exception as exc:  # noqa: BLE001 — reported to caller
+                    self.finished.emit(None, exc)
+
+        thread = QThread(self)
+        worker = _Worker()
+        worker.moveToThread(thread)
+        result = {}
+
+        # Progress signals cross into the UI thread (queued) — safe to touch
+        # the dialog widgets from the callback there.
+        worker.progressed.connect(
+            lambda f, t: cb(f, t), Qt.QueuedConnection)
+
+        loop = QEventLoop()
+
+        def _done(payload, exc):
+            result["payload"] = payload
+            result["exc"] = exc
+            loop.quit()
+
+        worker.finished.connect(_done, Qt.QueuedConnection)
+        thread.started.connect(worker.run)
+        thread.start()
+        loop.exec()
+        thread.quit()
+        thread.wait()
+        worker.deleteLater()
+        return result.get("payload"), result.get("exc")
+
     def _prepare_import_display(self, cmd, cb) -> None:
         """Pre-build the render/pick caches of freshly imported groups while
         the progress dialog is still up — otherwise the first orbit after a
@@ -1421,12 +1473,16 @@ class MainWindow(QMainWindow):
             # half-applied edit. NeedsConverter → fall through to skp2dae.
             dlg, cb = self._import_progress(
                 tr("Importing {name}…", name=skp.name))
-            payload = None
-            try:
-                payload = skp_format.parse_skp(skp, progress=cb)
-            except skp_format.NeedsConverter:
+            # The parse is heavy (seconds on a big model) and pure-Python, so
+            # running it on the UI thread starves the event loop and the OS
+            # paints a "not responding" ghost window. It touches no Scene, so
+            # run it in a worker thread while a LOCAL event loop keeps the UI
+            # (and the progress bar) alive; only apply_payload stays on the UI
+            # thread below.
+            payload, exc = self._parse_skp_threaded(skp, cb)
+            if isinstance(exc, skp_format.NeedsConverter):
                 payload = None
-            except Exception as exc:  # noqa: BLE001
+            elif exc is not None:
                 dlg.close()
                 QMessageBox.critical(self, tr("Import SKP failed"), str(exc))
                 return False

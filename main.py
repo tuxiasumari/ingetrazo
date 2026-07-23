@@ -91,7 +91,16 @@ def main() -> int:
                 window.open_path(doc)
             elif ext == ".skp":
                 from PySide6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: window.import_skp_path(doc))
+
+                def _open_skp():
+                    if window.import_skp_path(doc):
+                        # Frame the model — a double-clicked import often sits
+                        # far from the origin (geolocated models), so land the
+                        # camera on it instead of on empty space.
+                        if hasattr(window, "_on_zoom_extents"):
+                            window._on_zoom_extents()
+
+                QTimer.singleShot(0, _open_skp)
     window.show()
     return app.exec()
 
