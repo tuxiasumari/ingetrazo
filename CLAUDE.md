@@ -29,7 +29,7 @@ Modelador 3D estilo SketchUp para arquitectura/ingeniería civil e impresión 3D
 
 ## 📦 Estado actual (2026-07-21)
 
-**v0.2.2 released** (tag + binarios Windows por CI + instalado en la PC del usuario vía `scripts/install_desktop.sh`). El usuario lo usa como programa normal; las sesiones suelen arrancar con reportes de uso real.
+**v0.2.3 released 2026-07-22** (tag + binarios Windows por CI + `skp2dae.exe` re-adjuntado; instalado en la PC del usuario vía `scripts/install_desktop.sh`): **import .skp NATIVO puro-Python de todas las eras** — el build de Windows instala nuestro fork openskp (pineado por SHA en `build-windows.yml`; actualizar el SHA cuando avance la rama `ingetrazo` del fork) con hiddenimports en `ingetrazo.spec`; el fork hizo lazy trimesh/shapely (parse solo necesita numpy). El usuario lo usa como programa normal; las sesiones suelen arrancar con reportes de uso real.
 
 **El modelador está MUY completo:** dibujo (línea, rect, rect rotado, círculo, polígono, arcos ×4, offset, sígueme, texto 3D), push/pull robusto con **guard de hermeticidad grado-BIM** (nunca commitea un sólido roto; ops ambiguas se rechazan fail-safe), move/rotar/escala, grupos (v2: entrar con doble clic) + **componentes/instancias compartidas** (proto + xforms, O(1) transformar), materiales + texturas SketchUp-compatible (proyección planar + UVs afines por cara), pintar (B) con eyedropper, **Invertir caras**, cotas + texto guía, capas, bandeja lateral, face culling (dorso azul-gris, color de estilo del archivo), aristas soft/superficies curvas/profiles, **transparencias** (cutout con dither Bayer + materiales translúcidos con pase blend), zoom/zoom ventana, UI bilingüe (`tr()` + `es.json`).
 
